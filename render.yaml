@@ -1,0 +1,48 @@
+# ============================================================
+# Деплой на Render (бесплатный тариф)
+#
+# Как опубликовать сайт (5 минут):
+#   1. Залейте этот проект в публичный репозиторий GitHub.
+#   2. Зарегистрируйтесь на https://render.com (кнопка "Sign up", карта НЕ нужна).
+#   3. В дашборде Render: New -> Blueprint.
+#   4. Вставьте ссылку на репозиторий GitHub (или подключите аккаунт GitHub).
+#   5. Нажмите "Apply" — сайт будет опубликован на https://gruzchiki.onrender.com
+#
+# После первого деплоя (необязательно, но рекомендуется):
+#   - создайте бесплатный PostgreSQL в Supabase (https://supabase.com),
+#     откройте настройки сервиса Render -> Environment и укажите
+#     DATABASE_URL=postgresql+psycopg2://...?sslmode=require
+#     (иначе данные хранятся в SQLite на временном диске и пропадают
+#     при пересоздании сервиса);
+#   - задайте свой JWT_SECRET (длинная случайная строка);
+#   - при желании укажите TELEGRAM_BOT_TOKEN и TELEGRAM_ADMIN_CHAT_ID.
+# ============================================================
+
+services:
+  - type: web
+    name: gruzchiki
+    runtime: python
+    plan: free
+    region: frankfurt
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_PHONE
+        value: +70000000000
+      - key: ADMIN_PASSWORD
+        value: admin123
+      - key: ADMIN_NAME
+        value: Администратор
+      - key: CORS_ORIGINS
+        value: http://localhost:5173,http://127.0.0.1:5173
+      # Задаётся вручную в дашборде Render после создания сервиса:
+      - key: DATABASE_URL
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_ADMIN_CHAT_ID
+        sync: false

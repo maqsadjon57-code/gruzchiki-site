@@ -1,0 +1,19 @@
+# --- Секреты: НЕ ЗАГРУЖАТЬ на GitHub ---
+backend/.env
+
+# --- Python ---
+backend/.venv/
+backend/__pycache__/
+**/__pycache__/
+*.pyc
+
+# --- Локальная база и загруженные файлы ---
+backend/gruzchiki.db
+backend/uploads/
+backend/site_restart.log
+backend/smoke_services.py
+
+# --- Node.js ---
+frontend/node_modules/
+frontend/*.tsbuildinfo
+frontend/ui_check_desktop.png

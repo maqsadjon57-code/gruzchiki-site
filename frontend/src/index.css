@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   Базовые стили: яркий градиентный фон + анимированные пятна
+   Анимации фона работают только через transform/opacity —
+   это держит 120 FPS без перерисовок слоя.
+   ============================================================ */
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply text-slate-100 antialiased;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: #020617;
+  min-height: 100vh;
+}
+
+/* Типографика: чуть плотнее заголовки */
+h1, h2, h3, h4 {
+  letter-spacing: -0.02em;
+}
+
+/* Glass-панель: тёмное "ночное стекло" под лунное небо */
+.glass {
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.glass-strong {
+  background: rgba(2, 6, 23, 0.78);
+  backdrop-filter: blur(22px) saturate(160%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* Нативные выпадающие списки: тёмный фон в тон теме */
+select option {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+/* Градиентная обводка для "радужных" элементов */
+.gradient-border {
+  position: relative;
+  background-clip: padding-box;
+}
+.gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: linear-gradient(135deg, #6366f1, #d946ef, #f59e0b, #10b981);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* Красивый скроллбар в тему */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.08);
+}
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(180deg, #818cf8, #c084fc, #f472b6);
+  border: 2px solid rgba(2, 6, 23, 0.6);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #6366f1, #a855f7, #ec4899);
+}
+
+::selection {
+  background: linear-gradient(90deg, #818cf8, #e879f9);
+  color: #fff;
+}
+
+/* Доступность: отключаем декоративные анимации при настройке ОС */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
