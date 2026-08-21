@@ -30,9 +30,9 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import BASE_DIR, settings
 from .database import SessionLocal, engine
-from .routers import admin, aggregator, auth, orders, profile, regions, top20, ws
+from .routers import admin, aggregator, auth, orders, profile, regions, reviews, top20, ws
 from .seed import init_db, seed
-from .services import bot
+from .services import bot, telegram
 
 # Настройка логирования (в консоль)
 logging.basicConfig(
@@ -68,6 +68,14 @@ async def lifespan(app: FastAPI):
 
     # Telegram-бот для админа (если токен задан в .env)
     bot_thread = bot.start_bot_thread()
+
+    # Имя бота для кнопки «Написать админу» в шапке сайта (best-effort)
+    try:
+        username = telegram.get_bot_username()
+        if username:
+            logger.info("Telegram-бот: @%s (кнопка «Написать админу» активна)", username)
+    except Exception as exc:
+        logger.warning("Не удалось определить имя бота: %s", exc)
 
     logger.info("Приложение «Грузчики» запущено")
     yield
@@ -171,6 +179,7 @@ app.mount("/uploads", StaticFiles(directory=settings.upload_dir.parent), name="u
 # Подключаем роутеры
 app.include_router(auth.router)
 app.include_router(orders.router)
+app.include_router(reviews.router)
 app.include_router(profile.router)
 app.include_router(admin.router)
 app.include_router(regions.router)
@@ -193,10 +202,11 @@ def root():
         "docs": "/docs",
         "endpoints": [
             "/auth/register", "/auth/login",
-            "/orders", "/orders/{id}", "/orders/{id}/take",
+            "/orders", "/orders/public", "/orders/{id}", "/orders/{id}/take",
             "/profile", "/profile/topup", "/profile/payments",
             "/profile/orders", "/profile/stats",
             "/profile/avatar", "/profile/unlock-phone", "/profile/top20",
+            "/reviews", "/reviews/{order_id}", "/admin/reviews",
             "/top20",
             "/admin/users", "/admin/payments", "/admin/orders",
             "/admin/regions", "/admin/settings", "/admin/stats", "/admin/logs",
@@ -206,6 +216,9 @@ def root():
         "bank": {
             "name": settings.BANK_NAME,
             "phone": settings.BANK_PHONE,
+        },
+        "telegram": {
+            "username": telegram.get_bot_username(),
         },
     }
 

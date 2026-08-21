@@ -12,8 +12,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..database import get_db
-from ..models import AdminLog, User, generate_user_id
+from ..models import AdminLog, PromoCode, Referral, User, generate_user_id
 from ..schemas import LoginRequest, RegisterRequest, TokenOut, UserOut
 from ..security import create_token, hash_password, verify_password
 
@@ -54,13 +55,74 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
     db.add(user)
     db.flush()  # получаем id до commit
 
+    # --- Промокод / реферальный код ---
+    bonuses = _apply_promo_and_referral(db, user, data.promo_code)
+
     # Пишем в лог
     db.add(AdminLog(user_id=user.id, action="register",
-                    details=f"Зарегистрирован грузчик {user.public_id} ({phone})"))
+                    details=f"Зарегистрирован грузчик {user.public_id} ({phone})"
+                            + (f"; бонусы: {bonuses}" if bonuses else "")))
     db.commit()
     db.refresh(user)
 
     return _build_token_response(user)
+
+
+def _apply_promo_and_referral(
+    db: Session, user: User, promo_code: str | None
+) -> str:
+    """
+    Активировать промокод или реферальный код при регистрации.
+
+    В поле promo_code при регистрации грузчик может ввести:
+      * промокод из админ-панели (код вида WELCOME-100) — начисляется
+        бонус, указанный в промокоде;
+      * реферальный код пригласившего (его публичный ID, GRUZ-123456) —
+        бонус REFERRAL_BONUS начисляется обоим.
+
+    Вернуть человекочитаемое описание начисленных бонусов (для лога).
+    """
+    code = (promo_code or "").strip()
+    if not code:
+        return ""
+
+    # 1) Промокод из админ-панели (регистронезависимо)
+    promo = db.scalar(select(PromoCode).where(PromoCode.code == code.upper()))
+    if promo is not None:
+        if not promo.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Промокод неактивен")
+        if promo.max_uses > 0 and promo.uses_count >= promo.max_uses:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Промокод больше не действует (лимит использован)")
+        promo.uses_count += 1
+        user.balance = (user.balance or 0) + promo.bonus
+        db.add(AdminLog(user_id=user.id, action="promo_used",
+                        details=f"Активирован промокод {promo.code}: +{promo.bonus}₽"))
+        return f"промокод {promo.code} +{promo.bonus}₽"
+
+    # 2) Реферальный код — публичный ID пригласившего
+    referrer = db.scalar(select(User).where(User.public_id == code.upper()))
+    if referrer is not None:
+        if referrer.id == user.id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Нельзя пригласить самого себя")
+        if referrer.is_blocked:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Аккаунт пригласившего заблокирован")
+        bonus = settings.REFERRAL_BONUS
+        user.referred_by = referrer.id
+        user.balance = (user.balance or 0) + bonus
+        referrer.balance = (referrer.balance or 0) + bonus
+        db.add(Referral(referrer_id=referrer.id, referred_id=user.id, bonus_amount=bonus))
+        db.add(AdminLog(user_id=user.id, action="referral_used",
+                        details=f"Зарегистрирован по рефералке {referrer.public_id}: +{bonus}₽"))
+        db.add(AdminLog(user_id=referrer.id, action="referral_bonus",
+                        details=f"Бонус за приглашение {user.public_id}: +{bonus}₽"))
+        return f"рефералка {referrer.public_id} +{bonus}₽"
+
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Промокод не найден или недействителен")
 
 
 @router.post("/login", response_model=TokenOut, summary="Вход по телефону и паролю")

@@ -28,12 +28,22 @@ from ..models import (
     TakenOrder,
     User,
 )
-from ..schemas import MessageOut, OrderListOut, OrderOut
+from ..schemas import CustomerOrderCreate, MessageOut, OrderListOut, OrderOut
 from ..serializers import _to_utc_iso, serialize_order
 from ..services import order_sources, telegram
 from .ws import broadcast_orders_update
 
 router = APIRouter(prefix="/orders", tags=["orders"])
+
+
+def _resolve_region(db: Session, region_name: str) -> Region:
+    """Найти регион по имени; если нет — создать (то же правило, что у админа)."""
+    region = db.scalar(select(Region).where(Region.name == region_name.strip()))
+    if region is None:
+        region = Region(name=region_name.strip())
+        db.add(region)
+        db.flush()
+    return region
 
 
 def get_commission(db: Session) -> int:
@@ -208,6 +218,74 @@ def list_orders(
 def list_categories():
     """Фиксированный список категорий для фильтров и формы заказа."""
     return ["мебель", "стройматериалы", "бытовая техника", "хрупкие", "продукты", "переезд", "прочее"]
+
+
+@router.post("/public", response_model=OrderOut, summary="Разместить заказ (публичная форма)")
+async def create_public_order(
+    data: CustomerOrderCreate,
+    db: Session = Depends(get_db),
+):
+    """Создать заказ заказчиком через форму на сайте. Авторизация не нужна.
+
+    Заказ сразу публикуется в ленте, администратор получает уведомление
+    в Telegram. Поле source заполняется "form", чтобы отличать такие
+    заказы от созданных админом вручную.
+    """
+    region = _resolve_region(db, data.region_name)
+    order = Order(
+        region_id=region.id,
+        street=data.street.strip(),
+        house=data.house.strip(),
+        apartment=data.apartment,
+        entrance=data.entrance,
+        floor=data.floor,
+        landmarks=data.landmarks,
+        phone=data.phone,
+        customer_name=data.name,
+        price=data.price,
+        hourly_rate=data.hourly_rate,
+        weight=data.weight,
+        deadline=data.deadline,
+        duration_min=data.duration_min,
+        duration_max=data.duration_max,
+        category=data.category,
+        urgency=data.urgency,
+        description=data.description,
+        # Координаты точки выполнения (кнопка «Указать моё местоположение»)
+        latitude=data.latitude,
+        longitude=data.longitude,
+        status="active",
+        source="form",
+    )
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+
+    # Обновляем ленту в реальном времени и уведомляем админа в Telegram
+    await broadcast_orders_update(region=region.name)
+    # Push-уведомление всем подписанным грузчикам (Telegram)
+    telegram.notify_loaders_new_order(
+        order_id=order.id,
+        region=region.name,
+        address=", ".join(filter(None, [order.street, order.house,
+                                        order.apartment and f"кв. {order.apartment}"])),
+        price=order.price,
+        category=order.category,
+        deadline=order.deadline,
+    )
+    telegram.notify_new_order(
+        order_id=order.id,
+        region=region.name,
+        address=", ".join(filter(None, [order.street, order.house,
+                                        order.apartment and f"кв. {order.apartment}"])),
+        price=order.price,
+        category=order.category,
+        customer_name=order.customer_name,
+        customer_phone=order.phone,
+        deadline=order.deadline,
+    )
+
+    return OrderOut(**serialize_order(order, balance=None))
 
 
 @router.get("/{order_id}", response_model=OrderOut, summary="Детали заказа")

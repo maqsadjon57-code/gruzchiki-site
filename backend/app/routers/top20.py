@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import TakenExternalOrder, TakenOrder, User
+from ..models import Review, TakenExternalOrder, TakenOrder, User
 from ..schemas import TopUserOut
 
 router = APIRouter(prefix="/top20", tags=["top20"])
@@ -54,6 +54,16 @@ def top20_list(
         .group_by(TakenOrder.user_id)
     ).all())
 
+    # Рейтинг: средняя оценка и число отзывов от заказчиков
+    ratings: dict[int, tuple[float | None, int]] = {
+        user_id: (round(float(avg), 2), count)
+        for user_id, avg, count in db.execute(
+            select(Review.to_user_id, func.avg(Review.rating), func.count(Review.id))
+            .where(Review.from_role == "customer")
+            .group_by(Review.to_user_id)
+        ).all()
+    }
+
     users = db.scalars(
         select(User).where(User.is_active.is_(True), User.is_blocked.is_(False))
     ).all()
@@ -72,6 +82,8 @@ def top20_list(
             taken=taken_counts.get(u.id, 0),
             in_top20=True,
             top20_until=u.top20_until,
+            rating_avg=ratings.get(u.id, (None, 0))[0],
+            rating_count=ratings.get(u.id, (None, 0))[1],
         ))
 
     members.sort(key=lambda m: (-m.completed, -m.taken, m.name.lower()))

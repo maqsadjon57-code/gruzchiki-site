@@ -14,19 +14,34 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+import io
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from ..config import settings
 from ..database import get_db
 from ..deps import get_current_admin
-from ..models import AdminLog, Order, Payment, Region, Setting, TakenOrder, User
+from ..models import (
+    AdminLog,
+    Order,
+    Payment,
+    PromoCode,
+    Region,
+    Review,
+    Setting,
+    TakenOrder,
+    User,
+)
 from ..schemas import (
     MessageOut,
     OrderCreate,
     OrderOut,
     PaymentOut,
+    PromoCodeCreate,
+    PromoCodeOut,
+    PromoCodeUpdate,
     RegionCreate,
     SettingsUpdate,
     UserOut,
@@ -281,7 +296,10 @@ async def admin_create_order(
         category=data.category,
         urgency=data.urgency,
         description=data.description,
+        latitude=data.latitude,
+        longitude=data.longitude,
         status="active",
+        source="admin",
     )
     db.add(order)
     db.flush()
@@ -323,6 +341,8 @@ async def admin_update_order(
     order.category = data.category
     order.urgency = data.urgency
     order.description = data.description
+    order.latitude = data.latitude
+    order.longitude = data.longitude
 
     _log(db, admin, "update_order", f"Изменён заказ #{order.id}")
     db.commit()
@@ -487,50 +507,387 @@ def admin_update_settings(
 # ============================ СТАТИСТИКА =================================
 
 
-@router.get("/stats", summary="Статистика платформы")
+def _day_key(dt: datetime | None) -> str:
+    """Дата в формате YYYY-MM-DD (с учётом naive/aware datetime из БД)."""
+    if dt is None:
+        return ""
+    return (dt.replace(tzinfo=None) if dt.tzinfo else dt).date().isoformat()
+
+
+@router.get("/stats", summary="Статистика платформы (с графиками)")
 def admin_stats(
     db: Session = Depends(get_db),
     _admin: User = Depends(get_current_admin),
 ):
-    """Общая статистика: пользователи, заказы, доход от комиссий, оплаты."""
+    """
+    Расширенная статистика для админ-панели:
+      * пользователи (новые за день/неделю/месяц, активные за 30 дней);
+      * заказы (всего/взято/выполнено, по источникам, конверсия);
+      * финансы (доход от комиссий, подтверждённые пополнения, средний чек);
+      * графики за 14 дней: доход, публикации/взятия/выполнения, новые грузчики;
+      * распределение заказов по категориям и отзывы.
+    """
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = now - timedelta(weeks=1)
     month_start = now - timedelta(days=30)
 
+    # --- Базовые счётчики ---
     total_users = db.scalar(select(func.count(User.id))) or 0
     blocked_users = db.scalar(
         select(func.count(User.id)).where(User.is_blocked.is_(True))
     ) or 0
+    new_today = db.scalar(
+        select(func.count(User.id)).where(User.created_at >= today_start)
+    ) or 0
+    new_week = db.scalar(
+        select(func.count(User.id)).where(User.created_at >= week_start)
+    ) or 0
+    new_month = db.scalar(
+        select(func.count(User.id)).where(User.created_at >= month_start)
+    ) or 0
+    active_30d = db.scalar(
+        select(func.count(func.distinct(TakenOrder.user_id)))
+        .where(TakenOrder.taken_at >= month_start)
+    ) or 0
 
     total_orders = db.scalar(select(func.count(Order.id))) or 0
-    today_orders = db.scalar(select(func.count(Order.id)).where(Order.published_at >= today_start)) or 0
-    week_orders = db.scalar(select(func.count(Order.id)).where(Order.published_at >= week_start)) or 0
-    month_orders = db.scalar(select(func.count(Order.id)).where(Order.published_at >= month_start)) or 0
+    today_orders = db.scalar(
+        select(func.count(Order.id)).where(Order.published_at >= today_start)
+    ) or 0
+    week_orders = db.scalar(
+        select(func.count(Order.id)).where(Order.published_at >= week_start)
+    ) or 0
+    month_orders = db.scalar(
+        select(func.count(Order.id)).where(Order.published_at >= month_start)
+    ) or 0
 
-    commission_income = db.scalar(select(func.coalesce(func.sum(TakenOrder.commission), 0))) or 0
-    taken_count = db.scalar(select(func.count(TakenOrder.id))) or 0
+    taken_total = db.scalar(select(func.count(TakenOrder.id))) or 0
+    completed_total = db.scalar(
+        select(func.count(TakenOrder.id)).where(TakenOrder.completed_at.is_not(None))
+    ) or 0
 
+    form_orders = db.scalar(
+        select(func.count(Order.id)).where(Order.source == "form")
+    ) or 0
+
+    commission_income = db.scalar(
+        select(func.coalesce(func.sum(TakenOrder.commission), 0))
+    ) or 0
     pending_payments = db.scalar(
         select(func.count(Payment.id)).where(Payment.status == "pending")
     ) or 0
     confirmed_sum = db.scalar(
-        select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.status == "confirmed")
+        select(func.coalesce(func.sum(Payment.amount), 0))
+        .where(Payment.status == "confirmed")
+    ) or 0
+    avg_order_price = db.scalar(
+        select(func.coalesce(func.avg(Order.price), 0))
     ) or 0
 
+    # --- Графики за последние 14 дней (агрегация в Python — не зависит от БД) ---
+    days = [today_start - timedelta(days=i) for i in range(13, -1, -1)]
+    day_keys = [d.date().isoformat() for d in days]
+    income_by_day: dict[str, int] = {k: 0 for k in day_keys}
+    topups_by_day: dict[str, int] = {k: 0 for k in day_keys}
+    published_by_day: dict[str, int] = {k: 0 for k in day_keys}
+    taken_by_day: dict[str, int] = {k: 0 for k in day_keys}
+    completed_by_day: dict[str, int] = {k: 0 for k in day_keys}
+    new_users_by_day: dict[str, int] = {k: 0 for k in day_keys}
+    orders_by_category: dict[str, int] = {}
+
+    for t in db.scalars(select(TakenOrder)).all():
+        k = _day_key(t.taken_at)
+        if k in income_by_day:
+            income_by_day[k] += t.commission or 0
+            taken_by_day[k] += 1
+        if t.completed_at and _day_key(t.completed_at) in completed_by_day:
+            completed_by_day[_day_key(t.completed_at)] += 1
+
+    for o in db.scalars(select(Order)).all():
+        k = _day_key(o.published_at)
+        if k in published_by_day:
+            published_by_day[k] += 1
+        cat = o.category or "прочее"
+        orders_by_category[cat] = orders_by_category.get(cat, 0) + 1
+
+    for p in db.scalars(select(Payment).where(Payment.status == "confirmed")).all():
+        k = _day_key(p.confirmed_at or p.created_at)
+        if k in topups_by_day:
+            topups_by_day[k] += p.amount or 0
+
+    for u in db.scalars(select(User)).all():
+        k = _day_key(u.created_at)
+        if k in new_users_by_day:
+            new_users_by_day[k] += 1
+
+    # --- Отзывы ---
+    reviews_total = db.scalar(select(func.count(Review.id))) or 0
+    reviews_avg = db.scalar(
+        select(func.avg(Review.rating)).where(Review.from_role == "customer")
+    )
+    loader_reviews = db.scalar(
+        select(func.count(Review.id)).where(Review.from_role == "loader")
+    ) or 0
+
+    # --- Конверсия: опубликовано → взято → выполнено ---
+    taken_pct = round(taken_total / total_orders * 100, 1) if total_orders else 0.0
+    completed_pct = round(completed_total / total_orders * 100, 1) if total_orders else 0.0
+
     return {
-        "users": {"total": total_users, "blocked": blocked_users},
+        "users": {
+            "total": total_users,
+            "blocked": blocked_users,
+            "new_today": new_today,
+            "new_week": new_week,
+            "new_month": new_month,
+            "active_30d": active_30d,
+        },
         "orders": {
-            "today": today_orders, "week": week_orders,
-            "month": month_orders, "total": total_orders,
+            "today": today_orders,
+            "week": week_orders,
+            "month": month_orders,
+            "total": total_orders,
+            "taken": taken_total,
+            "completed": completed_total,
+            "by_source": {"admin": total_orders - form_orders, "form": form_orders},
+            "conversion": {"taken_pct": taken_pct, "completed_pct": completed_pct},
         },
         "finance": {
             "commission_income": int(commission_income),
-            "taken_orders": taken_count,
+            "taken_orders": taken_total,
             "confirmed_topups_sum": int(confirmed_sum),
             "pending_payments": pending_payments,
+            "avg_order_price": round(float(avg_order_price), 2),
+        },
+        "charts": {
+            "income_14d": [
+                {"date": k, "commission": income_by_day[k], "topups": topups_by_day[k]}
+                for k in day_keys
+            ],
+            "orders_14d": [
+                {
+                    "date": k,
+                    "published": published_by_day[k],
+                    "taken": taken_by_day[k],
+                    "completed": completed_by_day[k],
+                }
+                for k in day_keys
+            ],
+            "new_users_14d": [
+                {"date": k, "count": new_users_by_day[k]} for k in day_keys
+            ],
+            "orders_by_category": [
+                {"category": c, "count": n}
+                for c, n in sorted(orders_by_category.items(), key=lambda x: -x[1])
+            ],
+        },
+        "reviews": {
+            "total": reviews_total,
+            "avg_rating": round(float(reviews_avg), 2) if reviews_avg is not None else None,
+            "loader_reviews": loader_reviews,
         },
     }
+
+
+@router.get("/stats/export", summary="Выгрузка статистики в Excel")
+def admin_stats_export(
+    db: Session = Depends(get_db),
+    _admin: User = Depends(get_current_admin),
+):
+    """Сформировать .xlsx-файл со всеми данными для отчётности.
+
+    Листы: Статистика, Заказы, Платежи, Грузчики, Отзывы, Промокоды.
+    Файл отдаётся как вложение (Content-Disposition: attachment).
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="openpyxl не установлен — добавьте его в requirements.txt",
+        )
+
+    wb = Workbook()
+    bold = Font(bold=True)
+
+    # --- Лист «Статистика» ---
+    ws = wb.active
+    ws.title = "Статистика"
+    ws.append(["Показатель", "Значение"])
+    stats = admin_stats(db, _admin)
+    flat = [
+        ("Всего грузчиков", stats["users"]["total"]),
+        ("Заблокировано", stats["users"]["blocked"]),
+        ("Новых за 30 дней", stats["users"]["new_month"]),
+        ("Активных за 30 дней", stats["users"]["active_30d"]),
+        ("Заказов всего", stats["orders"]["total"]),
+        ("Заказов сегодня", stats["orders"]["today"]),
+        ("Взято заказов", stats["orders"]["taken"]),
+        ("Выполнено заказов", stats["orders"]["completed"]),
+        ("Конверсия в взятие, %", stats["orders"]["conversion"]["taken_pct"]),
+        ("Конверсия в выполнение, %", stats["orders"]["conversion"]["completed_pct"]),
+        ("Доход от комиссий, ₽", stats["finance"]["commission_income"]),
+        ("Подтверждено пополнений, ₽", stats["finance"]["confirmed_topups_sum"]),
+        ("Ожидают подтверждения", stats["finance"]["pending_payments"]),
+        ("Средний чек заказа, ₽", stats["finance"]["avg_order_price"]),
+        ("Отзывов всего", stats["reviews"]["total"]),
+        ("Средняя оценка заказчиков", stats["reviews"]["avg_rating"]),
+    ]
+    for row in flat:
+        ws.append(row)
+    for cell in ws[1]:
+        cell.font = bold
+    ws.column_dimensions["A"].width = 40
+    ws.column_dimensions["B"].width = 24
+
+    # --- Лист «Заказы» ---
+    ws2 = wb.create_sheet("Заказы")
+    ws2.append(["ID", "Регион", "Адрес", "Цена, ₽", "Категория", "Статус", "Источник", "Опубликован"])
+    for o in db.scalars(select(Order).order_by(Order.id.desc())).all():
+        ws2.append([
+            o.id, o.region.name if o.region else "",
+            f"{o.street} {o.house}".strip(),
+            o.price, o.category, o.status, o.source,
+            (o.published_at.replace(tzinfo=None) if o.published_at.tzinfo else o.published_at),
+        ])
+    for cell in ws2[1]:
+        cell.font = bold
+
+    # --- Лист «Платежи» ---
+    ws3 = wb.create_sheet("Платежи")
+    ws3.append(["ID", "Грузчик", "Сумма, ₽", "Назначение", "Статус", "Создан", "Подтверждён"])
+    for p in db.scalars(select(Payment).order_by(Payment.id.desc())).all():
+        user = db.get(User, p.user_id)
+        ws3.append([
+            p.id, user.name if user else "", p.amount, p.purpose, p.status,
+            (p.created_at.replace(tzinfo=None) if p.created_at.tzinfo else p.created_at),
+            (p.confirmed_at.replace(tzinfo=None) if p.confirmed_at and p.confirmed_at.tzinfo else p.confirmed_at),
+        ])
+    for cell in ws3[1]:
+        cell.font = bold
+
+    # --- Лист «Грузчики» ---
+    ws4 = wb.create_sheet("Грузчики")
+    ws4.append(["ID", "Публичный ID", "Имя", "Телефон", "Баланс, ₽", "Заблокирован", "Админ", "Регистрация"])
+    for u in db.scalars(select(User).order_by(User.id)).all():
+        ws4.append([
+            u.id, u.public_id, u.name, u.phone, u.balance,
+            "да" if u.is_blocked else "нет", "да" if u.is_admin else "нет",
+            (u.created_at.replace(tzinfo=None) if u.created_at.tzinfo else u.created_at),
+        ])
+    for cell in ws4[1]:
+        cell.font = bold
+
+    # --- Лист «Отзывы» ---
+    ws5 = wb.create_sheet("Отзывы")
+    ws5.append(["ID", "Заказ", "Кто", "Роль", "Оценка", "Комментарий", "Дата"])
+    for r in db.scalars(select(Review).order_by(Review.id.desc())).all():
+        ws5.append([
+            r.id, r.order_id,
+            (r.from_user.name if r.from_user else (r.from_phone or "")),
+            "заказчик" if r.from_role == "customer" else "грузчик",
+            r.rating, r.comment or "",
+            (r.created_at.replace(tzinfo=None) if r.created_at.tzinfo else r.created_at),
+        ])
+    for cell in ws5[1]:
+        cell.font = bold
+
+    # --- Лист «Промокоды» ---
+    ws6 = wb.create_sheet("Промокоды")
+    ws6.append(["ID", "Код", "Бонус, ₽", "Лимит", "Активаций", "Активен", "Создан"])
+    for pc in db.scalars(select(PromoCode).order_by(PromoCode.id)).all():
+        ws6.append([
+            pc.id, pc.code, pc.bonus, pc.max_uses, pc.uses_count,
+            "да" if pc.is_active else "нет",
+            (pc.created_at.replace(tzinfo=None) if pc.created_at.tzinfo else pc.created_at),
+        ])
+    for cell in ws6[1]:
+        cell.font = bold
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = f"stats_{datetime.now(timezone.utc).date().isoformat()}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# ============================ ПРОМОКОДЫ ==================================
+
+
+@router.get("/promocodes", response_model=list[PromoCodeOut], summary="Список промокодов")
+def admin_list_promocodes(
+    db: Session = Depends(get_db),
+    _admin: User = Depends(get_current_admin),
+):
+    """Все промокоды с количеством активаций (сначала новые)."""
+    return db.scalars(select(PromoCode).order_by(PromoCode.id.desc())).all()
+
+
+@router.post("/promocodes", response_model=PromoCodeOut, summary="Создать промокод")
+def admin_create_promocode(
+    data: PromoCodeCreate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Создать промокод: код (регистр не важен) + бонус + лимит активаций."""
+    code = data.code.strip().upper()
+    existing = db.scalar(select(PromoCode).where(PromoCode.code == code))
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Промокод с таким кодом уже существует")
+    promo = PromoCode(code=code, bonus=data.bonus, max_uses=data.max_uses)
+    db.add(promo)
+    _log(db, admin, "create_promo", f"Промокод {code}: +{data.bonus}₽, лимит {data.max_uses}")
+    db.commit()
+    db.refresh(promo)
+    return promo
+
+
+@router.patch("/promocodes/{promo_id}", response_model=PromoCodeOut, summary="Изменить промокод")
+def admin_update_promocode(
+    promo_id: int,
+    data: PromoCodeUpdate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Изменить бонус, лимит или включить/выключить промокод."""
+    promo = db.get(PromoCode, promo_id)
+    if promo is None:
+        raise HTTPException(status_code=404, detail="Промокод не найден")
+    if data.bonus is not None:
+        promo.bonus = data.bonus
+    if data.max_uses is not None:
+        promo.max_uses = data.max_uses
+    if data.is_active is not None:
+        promo.is_active = data.is_active
+    _log(db, admin, "update_promo", f"Промокод {promo.code} обновлён")
+    db.commit()
+    db.refresh(promo)
+    return promo
+
+
+@router.delete("/promocodes/{promo_id}", response_model=MessageOut, summary="Удалить промокод")
+def admin_delete_promocode(
+    promo_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Удалить промокод."""
+    promo = db.get(PromoCode, promo_id)
+    if promo is None:
+        raise HTTPException(status_code=404, detail="Промокод не найден")
+    code = promo.code
+    db.delete(promo)
+    _log(db, admin, "delete_promo", f"Удалён промокод {code}")
+    db.commit()
+    return MessageOut(message=f"Промокод {code} удалён")
 
 
 @router.get("/logs", summary="Журнал действий")

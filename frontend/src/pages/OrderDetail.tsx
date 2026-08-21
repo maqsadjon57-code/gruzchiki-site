@@ -10,7 +10,44 @@ import { api, ApiError } from '../api/client';
 import { Badge, Button, orderTimeLabel, rub, Spinner } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import type { Order } from '../types';
+import type { Order, Review } from '../types';
+
+// Выбор оценки 1–5 звёздами
+function RatingPicker({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex gap-1">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          type="button"
+          onClick={() => onChange(n)}
+          aria-label={`Оценка ${n}`}
+          className={`text-2xl leading-none transition-transform duration-100 hover:scale-125 ${
+            n <= value ? 'text-amber-400' : 'text-slate-600'
+          }`}
+        >
+          ★
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Звёзды для показа существующего отзыва
+function Stars({ rating }: { rating: number }) {
+  return (
+    <span className="text-amber-400 text-sm">
+      {'★'.repeat(rating)}
+      <span className="text-slate-600">{'★'.repeat(5 - rating)}</span>
+    </span>
+  );
+}
 
 export function OrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -23,11 +60,24 @@ export function OrderDetail() {
   const [error, setError] = useState<string | null>(null);
   const [taking, setTaking] = useState(false);
   const [arriving, setArriving] = useState(false);
+  const [reviews, setReviews] = useState<Review[] | null>(null);
+
+  // Форма отзыва заказчика (по телефону, без регистрации)
+  const [custRating, setCustRating] = useState(5);
+  const [custPhone, setCustPhone] = useState('');
+  const [custComment, setCustComment] = useState('');
+  const [custBusy, setCustBusy] = useState(false);
+
+  // Форма отзыва грузчика (только взявший заказ)
+  const [loaderRating, setLoaderRating] = useState(5);
+  const [loaderComment, setLoaderComment] = useState('');
+  const [loaderBusy, setLoaderBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const o = await api.orderDetail(orderId);
+      const [o, r] = await Promise.all([api.orderDetail(orderId), api.orderReviews(orderId)]);
       setOrder(o);
+      setReviews(r);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Заказ не найден');
@@ -37,6 +87,47 @@ export function OrderDetail() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Отзыв заказчика на грузчика: телефон сверяется с телефоном в заказе
+  const handleCustomerReview = async () => {
+    if (!custPhone.trim()) {
+      notify('Укажите телефон, с которого размещали заказ', 'error');
+      return;
+    }
+    setCustBusy(true);
+    try {
+      await api.submitReview(orderId, {
+        phone: custPhone.trim(),
+        rating: custRating,
+        comment: custComment.trim() || null,
+      });
+      notify('Спасибо! Ваш отзыв опубликован.', 'success');
+      setCustComment('');
+      await load();
+    } catch (e) {
+      notify(e instanceof ApiError ? e.message : 'Не удалось оставить отзыв', 'error');
+    } finally {
+      setCustBusy(false);
+    }
+  };
+
+  // Отзыв грузчика на заказчика (оценить может только взявший заказ)
+  const handleLoaderReview = async () => {
+    setLoaderBusy(true);
+    try {
+      await api.submitLoaderReview(orderId, {
+        rating: loaderRating,
+        comment: loaderComment.trim() || null,
+      });
+      notify('Отзыв отправлен. Спасибо!', 'success');
+      setLoaderComment('');
+      await load();
+    } catch (e) {
+      notify(e instanceof ApiError ? e.message : 'Не удалось оставить отзыв', 'error');
+    } finally {
+      setLoaderBusy(false);
+    }
+  };
 
   // Грузчик на месте: уведомление администратору в Telegram
   const handleArrive = async () => {
@@ -264,6 +355,101 @@ export function OrderDetail() {
             <p className="text-xs text-slate-400 text-center mt-2">
               Нажмите, когда приехали и начали работу. Администратор получит уведомление в Telegram.
             </p>
+          </div>
+        )}
+      </div>
+
+      {/* ======================== Отзывы и оценки ======================== */}
+      <div className="glass rounded-2xl mt-4 p-5">
+        <h2 className="text-sm font-bold text-slate-100 uppercase tracking-wide text-slate-400">
+          Отзывы и оценки
+        </h2>
+
+        {/* Список отзывов */}
+        {reviews === null ? (
+          <Spinner />
+        ) : reviews.length === 0 ? (
+          <p className="text-sm text-slate-400 mt-3">Пока нет отзывов.</p>
+        ) : (
+          <div className="flex flex-col gap-2 mt-3">
+            {reviews.map((r) => (
+              <div key={r.id} className="rounded-lg bg-slate-800/40 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Stars rating={r.rating} />
+                    <span className="text-xs text-slate-400">
+                      {r.from_role === 'customer' ? 'Заказчик' : 'Грузчик'}
+                      {r.from_name ? ` · ${r.from_name}` : ''}
+                    </span>
+                  </div>
+                  <span className="text-xs text-slate-500">{new Date(r.created_at).toLocaleDateString('ru-RU')}</span>
+                </div>
+                {r.comment && <p className="text-sm text-slate-200 mt-1">{r.comment}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Отзыв заказчика на грузчика — после выполнения заказа */}
+        {order.status === 'completed' && (
+          <div className="mt-4 rounded-lg bg-slate-800/40 p-4">
+            <h3 className="font-semibold text-slate-100 text-sm">Оцените грузчика</h3>
+            <p className="text-xs text-slate-400 mt-0.5 mb-2">
+              Укажите телефон, с которого размещали заказ, и поставьте оценку.
+            </p>
+            <div className="flex flex-col gap-3">
+              <input
+                type="tel"
+                placeholder="+7 912 000-00-00"
+                value={custPhone}
+                onChange={(e) => setCustPhone(e.target.value)}
+                className="rounded-lg bg-slate-900/80 border border-white/10 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-brand-400 focus:outline-none"
+              />
+              <RatingPicker value={custRating} onChange={setCustRating} />
+              <textarea
+                placeholder="Комментарий (необязательно)"
+                value={custComment}
+                onChange={(e) => setCustComment(e.target.value)}
+                rows={2}
+                className="rounded-lg bg-slate-900/80 border border-white/10 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-brand-400 focus:outline-none resize-none"
+              />
+              <Button
+                variant="secondary"
+                className="px-4 py-1.5 text-sm self-start"
+                disabled={custBusy}
+                onClick={() => void handleCustomerReview()}
+              >
+                {custBusy ? 'Отправляем…' : 'Отправить отзыв'}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Отзыв грузчика на заказчика — только у взявшего заказ */}
+        {order.status === 'completed' && order.taken_by_me && (
+          <div className="mt-3 rounded-lg bg-slate-800/40 p-4">
+            <h3 className="font-semibold text-slate-100 text-sm">Оцените заказчика</h3>
+            <p className="text-xs text-slate-400 mt-0.5 mb-2">
+              Как прошла работа? Ваша оценка видна администратору и влияет на рейтинг клиента.
+            </p>
+            <div className="flex flex-col gap-3">
+              <RatingPicker value={loaderRating} onChange={setLoaderRating} />
+              <textarea
+                placeholder="Комментарий (необязательно)"
+                value={loaderComment}
+                onChange={(e) => setLoaderComment(e.target.value)}
+                rows={2}
+                className="rounded-lg bg-slate-900/80 border border-white/10 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-brand-400 focus:outline-none resize-none"
+              />
+              <Button
+                variant="secondary"
+                className="px-4 py-1.5 text-sm self-start"
+                disabled={loaderBusy}
+                onClick={() => void handleLoaderReview()}
+              >
+                {loaderBusy ? 'Отправляем…' : 'Отправить отзыв'}
+              </Button>
+            </div>
           </div>
         )}
       </div>

@@ -87,12 +87,19 @@ def serialize_order(
         "landmarks": order.landmarks,
         "phone": order.phone if phone_available else None,
         "phone_available": phone_available,
+        # Имя заказчика — заполняется в форме «Разместить заказ»
+        "customer_name": order.customer_name,
+        # Откуда пришёл заказ: «form» (публичная форма) или None (создан админом)
+        "source": order.source,
         "price": order.price,
         "hourly_rate": order.hourly_rate,
         "weight": order.weight,
         "category": order.category,
         "urgency": order.urgency,
         "description": order.description,
+        # Координаты точки выполнения (для карты и сортировки по расстоянию)
+        "latitude": order.latitude,
+        "longitude": order.longitude,
         # SQLite хранит naive UTC — помечаем как UTC, чтобы фронтенд
         # не трактовал время как локальное
         "published_at": _to_utc_iso(order.published_at),

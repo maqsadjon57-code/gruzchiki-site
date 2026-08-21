@@ -17,8 +17,9 @@ from sqlalchemy.orm import Session, joinedload
 from ..config import settings
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import AdminLog, Order, Payment, TakenExternalOrder, TakenOrder, User
-from ..schemas import MessageOut, PaymentOut, StatsOut, TakenOrderOut, UserOut
+from ..models import AdminLog, Order, Payment, Referral, TakenExternalOrder, TakenOrder, User
+from ..schemas import MessageOut, PaymentOut, ReferralOut, StatsOut, TakenOrderOut, UserOut
+from ..routers.reviews import get_loader_rating
 from ..serializers import serialize_order
 from ..services import order_sources, settings_store, telegram
 from ..services.uploads import save_avatar, save_receipt
@@ -27,9 +28,15 @@ router = APIRouter(prefix="/profile", tags=["profile"])
 
 
 @router.get("", response_model=UserOut, summary="Профиль грузчика")
-def get_profile(current_user: User = Depends(get_current_user)):
-    """Вернуть данные профиля: ID, имя, телефон, баланс, статус."""
-    return UserOut.model_validate(current_user)
+def get_profile(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Вернуть данные профиля: ID, имя, телефон, баланс, статус, рейтинг."""
+    rating_avg, rating_count = get_loader_rating(db, current_user.id)
+    return UserOut.model_validate(current_user).model_copy(
+        update={"rating_avg": rating_avg, "rating_count": rating_count}
+    )
 
 
 @router.post("/topup", response_model=MessageOut, summary="Заявка на пополнение баланса")
@@ -197,6 +204,57 @@ async def top20_pay(
         message="Режим ТОП-20 активирован на сутки",
         detail={"top20_until": current_user.top20_until, "balance": current_user.balance},
     )
+
+
+@router.get("/referral", response_model=ReferralOut, summary="Моя реферальная ссылка")
+def my_referral(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Реферальная программа: «приведи грузчика — получи бонус на баланс».
+
+    Реферальный код грузчика — его публичный ID (например GRUZ-123456).
+    Его можно вставить в поле «Промокод» при регистрации нового грузчика.
+    """
+    count = db.scalar(
+        select(func.count(Referral.id)).where(Referral.referrer_id == current_user.id)
+    ) or 0
+    total = db.scalar(
+        select(func.coalesce(func.sum(Referral.bonus_amount), 0))
+        .where(Referral.referrer_id == current_user.id)
+    ) or 0
+    return ReferralOut(
+        code=current_user.public_id,
+        link=f"{settings.SITE_URL}/register?ref={current_user.public_id}",
+        bonus=settings.REFERRAL_BONUS,
+        referrals_count=count,
+        total_bonus=int(total),
+    )
+
+
+@router.get("/notify-link", summary="Ссылка на push-уведомления в Telegram")
+def notify_link(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Push-уведомления о новых заказах через Telegram-бота.
+
+    Возвращает deep-link `https://t.me/<bot>?start=bind_<user_id>`: грузчик
+    открывает его, нажимает Start у бота — и его chat_id привязывается к
+    аккаунту. С этого момента на телефон приходят уведомления о новых
+    заказах, даже если сайт закрыт.
+    """
+    bot = telegram.get_bot_username()
+    if not bot:
+        return {"enabled": False, "link": "", "bot": "", "chat_id": None}
+    return {
+        "enabled": True,
+        "link": f"https://t.me/{bot}?start=bind_{current_user.id}",
+        "bot": bot,
+        "chat_id": current_user.telegram_chat_id,
+    }
 
 
 @router.get("/services", summary="Цены услуг и реквизиты для личного кабинета")

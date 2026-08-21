@@ -135,12 +135,75 @@ export function Feed() {
     return m;
   }, [data]);
 
-  // Заказы с учётом фильтра по часу
+  // Расстояние по формуле гаверсинуса (км) между двумя точками
+  function haversineKm(
+    a: { lat: number; lng: number },
+    b: { lat: number; lng: number },
+  ): number {
+    const R = 6371;
+    const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+    const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+    const la1 = (a.lat * Math.PI) / 180;
+    const la2 = (b.lat * Math.PI) / 180;
+    const h =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+
+  // Координаты грузчика (свои) для сортировки «Сначала ближайшие»
+  const [myPos, setMyPos] = useState<{ lat: number; lng: number } | null>(null);
+  const [geoStatus, setGeoStatus] = useState<string | null>(null);
+
+  // Запрос геолокации при выборе сортировки по расстоянию
+  const enableDistanceSort = () => {
+    if (myPos) return;
+    if (!('geolocation' in navigator)) {
+      setGeoStatus('Геолокация не поддерживается браузером');
+      return;
+    }
+    setGeoStatus('Определяем ваше местоположение…');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setMyPos({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setGeoStatus(null);
+      },
+      () => {
+        setGeoStatus('Доступ к геолокации запрещён — сортировка по расстоянию недоступна');
+        setSort('new');
+      },
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  };
+
+  // Заказы с учётом фильтра по часу и сортировки по расстоянию
   const visibleOrders = useMemo(() => {
     if (!data) return [];
-    if (hour === null) return data.orders;
-    return data.orders.filter((o) => new Date(o.published_at).getHours() === hour);
-  }, [data, hour]);
+    let list =
+      hour === null
+        ? data.orders
+        : data.orders.filter((o) => new Date(o.published_at).getHours() === hour);
+    if (sort === 'distance' && myPos) {
+      list = [...list].sort((a, b) => {
+        const da =
+          a.latitude != null && a.longitude != null
+            ? haversineKm(myPos, { lat: a.latitude, lng: a.longitude })
+            : Infinity;
+        const db =
+          b.latitude != null && b.longitude != null
+            ? haversineKm(myPos, { lat: b.latitude, lng: b.longitude })
+            : Infinity;
+        return da - db;
+      });
+    }
+    return list;
+  }, [data, hour, sort, myPos]);
+
+  // Дистанция до заказа (км) — для подписи на карточке
+  const distOf = (o: { latitude: number | null; longitude: number | null }): number | null => {
+    if (!myPos || o.latitude == null || o.longitude == null) return null;
+    return haversineKm(myPos, { lat: o.latitude, lng: o.longitude });
+  };
 
   return (
     <div>
@@ -242,6 +305,7 @@ export function Feed() {
           <option value="new">Сначала новые</option>
           <option value="price_asc">Цена ↑</option>
           <option value="price_desc">Цена ↓</option>
+          <option value="distance">Сначала ближайшие</option>
         </select>
 
         <input
@@ -263,6 +327,28 @@ export function Feed() {
           Срочные
         </label>
       </div>
+
+      {/* Статус геолокации при сортировке по расстоянию */}
+      {sort === 'distance' && (
+        <div className="mb-4">
+          {!myPos && !geoStatus && (
+            <button
+              onClick={enableDistanceSort}
+              className="text-xs text-brand-300 font-medium hover:underline"
+            >
+              📍 Разрешить геолокацию для сортировки по расстоянию
+            </button>
+          )}
+          {geoStatus && <p className="text-xs text-slate-400">{geoStatus}</p>}
+          {myPos && (
+            <p className="text-xs text-slate-400">
+              Сортировка по расстоянию от вас: без координат — в конце списка.{' '}
+              {visibleOrders.filter((o) => o.latitude != null && o.longitude != null).length} из{' '}
+              {visibleOrders.length} заказов с точкой на карте.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Фильтр по часу: все 24 часа со счётчиками */}
       <div className="mb-4">
@@ -330,7 +416,9 @@ export function Feed() {
       )}
 
       <div className="flex flex-col gap-3">
-        {visibleOrders.map((o) => <OrderCard key={o.id} order={o} />)}
+        {visibleOrders.map((o) => (
+          <OrderCard key={o.id} order={o} distanceKm={distOf(o)} />
+        ))}
       </div>
     </div>
   );

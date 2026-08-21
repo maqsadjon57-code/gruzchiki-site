@@ -17,3 +17,4 @@ backend/smoke_services.py
 frontend/node_modules/
 frontend/*.tsbuildinfo
 frontend/ui_check_desktop.png
+backend_run.log

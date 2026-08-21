@@ -14,6 +14,7 @@ export interface Order {
   landmarks: string | null;
   phone: string | null;    // телефон скрыт, пока баланс < порога
   phone_available: boolean;
+  customer_name: string | null; // имя заказчика (из формы «Разместить заказ»)
   price: number;           // стоимость заказа, руб.
   hourly_rate: number | null;
   weight: number | null;
@@ -32,6 +33,33 @@ export interface Order {
   taken_by: string | null;       // имя грузчика, взявшего заказ
   taken_by_me: boolean;          // true — заказ взял текущий грузчик
   arrived_at: string | null;     // когда грузчик отметился «на месте» (ISO)
+  latitude: number | null;       // координаты точки выполнения (для карты)
+  longitude: number | null;
+}
+
+// Данные формы «Разместить заказ» (публичный эндпоинт POST /orders/public)
+export interface CustomerOrderCreate {
+  region_name: string;
+  name: string;
+  phone: string;
+  street: string;
+  house: string;
+  apartment?: string | null;
+  entrance?: string | null;
+  floor?: string | null;
+  landmarks?: string | null;
+  price: number;
+  hourly_rate?: number | null;
+  weight?: number | null;
+  deadline?: string | null;    // формат HH:MM
+  duration_min?: number | null;
+  duration_max?: number | null;
+  category?: string;
+  urgency?: boolean;
+  description?: string | null;
+  // Координаты из геолокации браузера (кнопка «Определить местоположение»)
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 // Ответ ленты: заказы + счётчики по регионам
@@ -112,15 +140,43 @@ export interface RegionWithCount {
   orders_today: number;
 }
 
-// Админ-статистика (общий дашборд)
+// Админ-статистика (общий дашборд с графиками)
 export interface AdminStats {
-  users: { total: number; blocked: number };
-  orders: { total: number; today: number; week: number; month: number };
+  users: {
+    total: number;
+    blocked: number;
+    new_today: number;
+    new_week: number;
+    new_month: number;
+    active_30d: number;
+  };
+  orders: {
+    total: number;
+    today: number;
+    week: number;
+    month: number;
+    taken: number;
+    completed: number;
+    by_source: { admin: number; form: number };
+    conversion: { taken_pct: number; completed_pct: number };
+  };
   finance: {
     commission_income: number;
     taken_orders: number;
     confirmed_topups_sum: number;
     pending_payments: number;
+    avg_order_price: number;
+  };
+  charts: {
+    income_14d: { date: string; commission: number; topups: number }[];
+    orders_14d: { date: string; published: number; taken: number; completed: number }[];
+    new_users_14d: { date: string; count: number }[];
+    orders_by_category: { category: string; count: number }[];
+  };
+  reviews: {
+    total: number;
+    avg_rating: number | null;
+    loader_reviews: number;
   };
 }
 
@@ -226,6 +282,70 @@ export interface AggregatorFeed {
   updated_at: string;
   sources: Record<string, string>;
   items: ExternalOrder[];
+}
+
+// Отзыв (заказчик на грузчика или грузчик на заказчика)
+export interface Review {
+  id: number;
+  order_id: number;
+  from_role: 'customer' | 'loader';
+  from_name: string | null;
+  rating: number;
+  comment: string | null;
+  created_at: string;
+}
+
+// Тело запроса отзыва заказчика на грузчика (POST /reviews/orders/{id}/review)
+export interface ReviewCreate {
+  phone: string;
+  rating: number;
+  comment?: string | null;
+}
+
+// Тело запроса отзыва грузчика на заказчика (POST /reviews/orders/{id}/review-loader)
+export interface ReviewLoaderCreate {
+  rating: number;
+  comment?: string | null;
+}
+
+// Промокод (админка: список/создание/изменение)
+export interface PromoCode {
+  id: number;
+  code: string;
+  bonus: number;
+  max_uses: number;
+  uses_count: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface PromoCodeCreate {
+  code: string;
+  bonus: number;
+  max_uses: number;
+}
+
+export interface PromoCodeUpdate {
+  bonus?: number;
+  max_uses?: number;
+  is_active?: boolean;
+}
+
+// Реферальная программа (ответ /profile/referral)
+export interface Referral {
+  code: string;
+  link: string;
+  bonus: number;
+  referrals_count: number;
+  total_bonus: number;
+}
+
+// Push-уведомления в Telegram (ответ /profile/notify-link)
+export interface NotifyLink {
+  enabled: boolean;
+  link: string;
+  bot: string;
+  chat_id: number | null;
 }
 
 // Событие WebSocket-ленты

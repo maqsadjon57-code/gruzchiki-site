@@ -1,13 +1,16 @@
 """
-Telegram-бот для администратора: обработка нажатий на кнопки.
+Telegram-бот: админ-уведомления и push-подписки грузчиков.
 
-Бот в фоне опрашивает Bot API (long polling) и обрабатывает
-callback-кнопки из уведомлений:
-  * confirm:<payment_id> — подтвердить оплату (баланс растёт);
-  * reject:<payment_id>  — отклонить заявку.
+Бот в фоне опрашивает Bot API (long polling) и обрабатывает:
+  * callback confirm:<payment_id> / reject:<payment_id> — подтверждение
+    оплаты (только для чата администратора);
+  * /start bind_<user_id> — привязка Telegram-чата к аккаунту грузчика
+    (подписка на push-уведомления о новых заказах);
+  * callback unsubscribe — отписка от уведомлений.
 
-Безопасность: принимать решения может только чат, указанный в
-настройке TELEGRAM_ADMIN_CHAT_ID. Остальные запросы игнорируются.
+Безопасность: решения по оплатам принимает только чат, указанный в
+настройке TELEGRAM_ADMIN_CHAT_ID. Подписка грузчика привязывает чат
+к аккаунту, но не даёт прав администратора.
 
 Запуск: python -m app.services.bot  (или автоматически вместе с API,
 если токен задан — см. lifespan в main.py).
@@ -60,7 +63,18 @@ def _admin_user(db) -> User | None:
 
 
 def _handle_callback(chat_id: int, callback_id: str, data: str) -> None:
-    """Обработать нажатие кнопки confirm:/reject: (только для админа)."""
+    """Обработать нажатие кнопок confirm:/reject:/unsubscribe."""
+    # Отписка от push доступна любому подписанному чату (до проверки прав админа)
+    if data == "unsubscribe":
+        name = _unbind_chat(chat_id)
+        _api("answerCallbackQuery", {"callback_query_id": callback_id})
+        if name:
+            _api("sendMessage", {
+                "chat_id": chat_id,
+                "text": f"🔕 {name}, вы отписались от уведомлений о новых заказах.",
+            })
+        return
+
     # Лишние нажатия (дубль) — тихо игнорируем
     if chat_id != int(settings.TELEGRAM_ADMIN_CHAT_ID):
         logger.warning("Запрос от неавторизованного чата: %s", chat_id)
@@ -108,25 +122,107 @@ def _handle_callback(chat_id: int, callback_id: str, data: str) -> None:
     })
 
 
+def _bind_chat(chat_id: int, user_id: int) -> str | None:
+    """Привязать Telegram-чат к аккаунту грузчика. Возвращает имя или None."""
+    from sqlalchemy import select
+
+    try:
+        with SessionLocal() as db:
+            user = db.get(User, user_id)
+            if user is None:
+                return None
+            if user.is_blocked:
+                return "blocked"
+            user.telegram_chat_id = chat_id
+            db.add(AdminLog(user_id=user.id, action="bind_telegram",
+                            details=f"Грузчик {user.public_id} подписался на push "
+                                    f"(chat_id={chat_id})"))
+            db.commit()
+            return user.name or user.public_id
+    except Exception as exc:
+        logger.exception("Ошибка привязки chat_id: %s", exc)
+        return None
+
+
+def _unbind_chat(chat_id: int) -> str | None:
+    """Отвязать чат от аккаунта (отписка от push). Возвращает имя или None."""
+    from sqlalchemy import select
+
+    try:
+        with SessionLocal() as db:
+            user = db.scalar(select(User).where(User.telegram_chat_id == chat_id))
+            if user is None:
+                return None
+            user.telegram_chat_id = None
+            db.add(AdminLog(user_id=user.id, action="unbind_telegram",
+                            details=f"Грузчик {user.public_id} отписался от push"))
+            db.commit()
+            return user.name or user.public_id
+    except Exception as exc:
+        logger.exception("Ошибка отписки chat_id: %s", exc)
+        return None
+
+
 def _handle_message(chat_id: int, text: str) -> None:
-    """Ответ на /start: подсказка, как включить уведомления."""
-    if text != "/start":
+    """Ответ на /start: подписка грузчика или подсказка админу."""
+    if not text.startswith("/start"):
         return
-    if chat_id != int(settings.TELEGRAM_ADMIN_CHAT_ID):
+
+    # Подписка на push: https://t.me/<bot>?start=bind_<user_id>
+    payload = text[len("/start"):].strip()
+    if payload.startswith("bind_"):
+        raw = payload[len("bind_"):].strip()
+        if raw.isdigit():
+            name = _bind_chat(chat_id, int(raw))
+            if name == "blocked":
+                _api("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "🚫 Ваш аккаунт заблокирован — уведомления недоступны.",
+                })
+                return
+            if name:
+                _api("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": (
+                        f"✅ {name}, вы подписаны на уведомления о новых заказах!\n\n"
+                        f"Как только в ленте появится заказ — пришлём его сюда.\n"
+                        f"Отписаться можно кнопкой «🔕 Отписаться» в любом уведомлении "
+                        f"или командой /stop."
+                    ),
+                })
+                return
         _api("sendMessage", {
             "chat_id": chat_id,
-            "text": "Привет! Этот бот — для администратора сервиса. "
-                    "Нажмите кнопки в уведомлениях, чтобы подтверждать оплаты.",
+            "text": "❌ Не удалось привязать аккаунт. Откройте ссылку из личного "
+                    "кабинета заново.",
+        })
+        return
+
+    if text == "/stop":
+        name = _unbind_chat(chat_id)
+        if name:
+            _api("sendMessage", {
+                "chat_id": chat_id,
+                "text": f"🔕 {name}, вы отписались от уведомлений. Чтобы снова "
+                        f"получать заказы — нажмите кнопку подписки в личном кабинете.",
+            })
+        return
+
+    if chat_id == int(settings.TELEGRAM_ADMIN_CHAT_ID):
+        _api("sendMessage", {
+            "chat_id": chat_id,
+            "text": (
+                "✅ Бот администратора работает.\n\n"
+                "Сюда приходят уведомления о новых заявках: пополнение баланса, "
+                "доступ к телефонам, ТОП-20 — и о взятии заказов. Кнопки в "
+                "уведомлении сразу подтверждают или отклоняют оплату."
+            ),
         })
         return
     _api("sendMessage", {
         "chat_id": chat_id,
-        "text": (
-            "✅ Бот администратора работает.\n\n"
-            "Сюда приходят уведомления о новых заявках: пополнение баланса, "
-            "доступ к телефонам, ТОП-20 — и о взятии заказов. Кнопки в "
-            "уведомлении сразу подтверждают или отклоняют оплату."
-        ),
+        "text": "Привет! Подпишитесь на уведомления о новых заказах в личном "
+                "кабинете на сайте — там есть кнопка «Push-уведомления в Telegram».",
     })
 
 

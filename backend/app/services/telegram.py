@@ -24,6 +24,9 @@ logger = logging.getLogger("gruzchiki.telegram")
 
 API_BASE = "https://api.telegram.org/bot{token}"
 
+# Кэш имени бота (username без @), определённого через getMe.
+_bot_username_cache: str | None = None
+
 # Назначения платежей: ключ -> (подпись, эмодзи)
 PAYMENT_PURPOSES = {
     "topup": ("пополнение баланса", "💳"),
@@ -37,9 +40,33 @@ def enabled() -> bool:
     return bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_ADMIN_CHAT_ID)
 
 
+def bot_configured() -> bool:
+    """Бот вообще настроен (токен есть). Пуш грузчикам работает и без chat_id админа."""
+    return bool(settings.TELEGRAM_BOT_TOKEN)
+
+
+def get_bot_username() -> str:
+    """Имя бота (без @) для ссылки «Написать админу» в шапке сайта.
+
+    Приоритет: настройка TELEGRAM_BOT_USERNAME > getMe (кэшируется).
+    Если определить не удалось — возвращаем пустую строку (кнопка скрыта).
+    """
+    global _bot_username_cache
+    if settings.TELEGRAM_BOT_USERNAME.strip():
+        return settings.TELEGRAM_BOT_USERNAME.strip().lstrip("@")
+    if _bot_username_cache is not None:
+        return _bot_username_cache
+    data = _call("getMe", {})
+    username = ""
+    if data and data.get("ok"):
+        username = ((data.get("result") or {}).get("username") or "").strip()
+    _bot_username_cache = username
+    return username
+
+
 def _call(method: str, payload: dict) -> dict | None:
     """Выполнить запрос к Bot API и вернуть JSON (или None при ошибке)."""
-    if not enabled():
+    if not bot_configured():
         return None
     try:
         resp = requests.post(f"{API_BASE.format(token=settings.TELEGRAM_BOT_TOKEN)}/{method}",
@@ -142,6 +169,105 @@ def _call_files(method: str, payload: dict, files: dict) -> dict | None:
     except Exception as exc:
         logger.warning("Telegram request failed: %s", exc)
         return None
+
+
+def notify_loaders_new_order(
+    order_id: int,
+    region: str,
+    address: str,
+    price: int | None,
+    category: str,
+    deadline: str | None,
+) -> None:
+    """
+    Push-уведомление подписанным грузчикам о новом заказе в ленте.
+
+    Рассылается всем пользователям с заполненным telegram_chat_id
+    (кто нажал кнопку подписки в личном кабинете и написал боту).
+    Ошибки доставки не роняют создание заказа.
+    """
+    if not bot_configured():
+        return
+    try:
+        from sqlalchemy import select
+        from ..database import SessionLocal
+        from ..models import User
+
+        chat_ids = []
+        with SessionLocal() as db:
+            chat_ids = list(db.scalars(
+                select(User.telegram_chat_id).where(
+                    User.telegram_chat_id.is_not(None),
+                    User.is_blocked.is_(False),
+                )
+            )) or []
+        if not chat_ids:
+            return
+        dl = f"до {deadline}" if deadline else "не указан"
+        text = (
+            f"🚚 Новый заказ в ленте!\n"
+            f"🆔 Заказ #{order_id}\n"
+            f"📍 Регион: {region}\n"
+            f"🏠 Адрес: {address}\n"
+            f"💰 Цена: {price} ₽\n"
+            f"📦 Категория: {category}\n"
+            f"⏱️ Дедлайн: {dl}\n\n"
+            f"Открыть ленту: {settings.SITE_URL}"
+        )
+        url = f"{settings.SITE_URL}/orders/{order_id}"
+        markup = {
+            "inline_keyboard": [[
+                {"text": "📋 Посмотреть заказ", "url": url},
+                {"text": "🔕 Отписаться", "callback_data": "unsubscribe"},
+            ]]
+        }
+        for chat_id in chat_ids:
+            try:
+                _call("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": text,
+                    "reply_markup": markup,
+                })
+            except Exception:
+                logger.warning("Не удалось отправить push грузчику chat_id=%s", chat_id)
+    except Exception as exc:
+        logger.warning("Рассылка грузчикам не удалась: %s", exc)
+
+
+def notify_new_order(
+    order_id: int,
+    region: str,
+    address: str,
+    price: int | None,
+    category: str,
+    customer_name: str | None,
+    customer_phone: str,
+    deadline: str | None,
+) -> None:
+    """
+    Уведомить админа о новом заказе с формы «Разместить заказ».
+
+    В сообщении — адрес, цена, категория, имя и телефон заказчика,
+    чтобы админ мог при необходимости связаться с клиентом.
+    """
+    dl = f"до {deadline}" if deadline else "не указан"
+    name = (customer_name or "").strip() or "Не указано"
+    text = (
+        f"🆕 Новый заказ с сайта!\n"
+        f"🆔 Заказ #{order_id}\n"
+        f"📍 Регион: {region}\n"
+        f"🏠 Адрес: {address}\n"
+        f"💰 Цена: {price} ₽\n"
+        f"📦 Категория: {category}\n"
+        f"👤 Заказчик: {name}\n"
+        f"📞 Телефон: {customer_phone}\n"
+        f"⏱️ Дедлайн: {dl}\n\n"
+        f"Заказ уже опубликован в ленте — грузчики могут его взять."
+    )
+    _call("sendMessage", {
+        "chat_id": settings.TELEGRAM_ADMIN_CHAT_ID,
+        "text": text,
+    })
 
 
 def notify_order_taken(order_id: int, user_name: str) -> None:

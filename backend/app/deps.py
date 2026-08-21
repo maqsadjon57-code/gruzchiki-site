@@ -46,6 +46,23 @@ def get_current_user(
     return user
 
 
+def get_optional_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User | None:
+    """То же, что get_current_user, но без токена/с невалидным токеном возвращает None
+    (для публичных эндпоинтов, где авторизация опциональна)."""
+    if credentials is None:
+        return None
+    payload = decode_token(credentials.credentials)
+    if payload is None:
+        return None
+    user = db.get(User, int(payload["sub"]))
+    if user is None or user.is_blocked:
+        return None
+    return user
+
+
 def get_current_admin(user: User = Depends(get_current_user)) -> User:
     """Требование прав администратора для админ-эндпоинтов."""
     if not user.is_admin:

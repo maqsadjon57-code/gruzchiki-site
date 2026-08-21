@@ -16,8 +16,10 @@ import random
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -87,6 +89,13 @@ class User(Base):
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
     # Признак администратора
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Telegram chat_id для push-уведомлений о новых заказах (заполняется,
+    # когда грузчик нажимает кнопку подписки и пишет боту).
+    telegram_chat_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True
+    )
+    # ID пользователя, по чьей реферальной ссылке зарегистрирован этот грузчик
+    referred_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     # confirmed_by тоже ссылается на users.id, поэтому явно указываем
@@ -119,6 +128,8 @@ class Order(Base):
     landmarks: Mapped[str | None] = mapped_column(String(300), nullable=True) # ориентиры
     # Телефон заказчика — скрыт от грузчика, пока баланс < порога
     phone: Mapped[str] = mapped_column(String(20))
+    # Имя заказчика — заполняется в форме «Разместить заказ» (для админа)
+    customer_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     # --- Финансовые условия ---
     price: Mapped[int] = mapped_column(Integer)            # стоимость, руб.
@@ -137,13 +148,23 @@ class Order(Base):
     urgency: Mapped[bool] = mapped_column(Boolean, default=False)        # срочный?
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Координаты точки выполнения (для карты и сортировки по расстоянию).
+    # Заполняются через кнопку «Указать моё местоположение» в форме заказа.
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     # Статус: active (активен) / taken (взят грузчиком) / completed (выполнен)
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    # Откуда заказ: admin (создан админом) / form (создан заказчиком на сайте)
+    source: Mapped[str] = mapped_column(String(20), default="admin", server_default="admin")
 
     region: Mapped["Region"] = relationship(back_populates="orders")
     taken: Mapped["TakenOrder | None"] = relationship(
         back_populates="order", uselist=False, cascade="all, delete-orphan"
+    )
+    reviews: Mapped[list["Review"]] = relationship(
+        back_populates="order", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:
@@ -225,6 +246,88 @@ class TakenExternalOrder(Base):
 
     def __repr__(self) -> str:
         return f"<TakenExternalOrder #{self.id} ext_order={self.ext_order_id} user={self.user_id}>"
+
+
+class Review(Base):
+    """Отзыв и оценка (рейтинг) по заказу.
+
+    Один заказ может иметь максимум два отзыва:
+      * от заказчика на грузчика (from_role="customer") — публичный рейтинг;
+      * от грузчика на заказчика (from_role="loader") — виден администратору.
+
+    Заказчик не является пользователем сайта, поэтому для него хранится
+    телефон (from_phone) и оценка id заказчика не нужен.
+    """
+
+    __tablename__ = "reviews"
+    __table_args__ = (UniqueConstraint("order_id", "from_role", name="uq_review_order_role"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True)
+    # Кто оставил отзыв: customer (заказчик) / loader (грузчик)
+    from_role: Mapped[str] = mapped_column(String(20), default="customer")
+    # ID пользователя, оставившего отзыв (None для заказчика)
+    from_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # Телефон заказчика (для from_role="customer") — проверяется при отправке
+    from_phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Кому отзыв: ID грузчика (для customer) или None (грузчик оценивает заказчика)
+    to_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    # Оценка от 1 до 5
+    rating: Mapped[int] = mapped_column(Integer)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    order: Mapped["Order"] = relationship(back_populates="reviews")
+    from_user: Mapped["User | None"] = relationship(foreign_keys=[from_user_id])
+    to_user: Mapped["User | None"] = relationship(foreign_keys=[to_user_id])
+
+    def __repr__(self) -> str:
+        return f"<Review #{self.id} order={self.order_id} {self.from_role} {self.rating}>"
+
+
+class PromoCode(Base):
+    """Промокод: при регистрации начисляет бонус на баланс."""
+
+    __tablename__ = "promo_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Код, который вводит новый грузчик при регистрации (верхний регистр)
+    code: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    # Бонус, начисляемый на баланс при активации, руб.
+    bonus: Mapped[int] = mapped_column(Integer, default=100)
+    # 0 — без ограничений; иначе максимум активаций
+    max_uses: Mapped[int] = mapped_column(Integer, default=0)
+    uses_count: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    def __repr__(self) -> str:
+        return f"<PromoCode {self.code} +{self.bonus}₽>"
+
+
+class Referral(Base):
+    """Реферальная программа: кто кого привёл (аудит начислений бонусов).
+
+    Когда новый грузчик регистрируется с реферальным кодом (публичным ID
+    пригласившего, например GRUZ-123456), создаётся запись и обоим
+    начисляется бонус REFERRAL_BONUS на баланс.
+    """
+
+    __tablename__ = "referrals"
+    __table_args__ = (UniqueConstraint("referred_id", name="uq_referral_referred"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    referrer_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    referred_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    # Бонус, начисленный пригласившему, руб.
+    bonus_amount: Mapped[int] = mapped_column(Integer, default=100)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    referrer: Mapped["User"] = relationship(foreign_keys=[referrer_id])
+    referred: Mapped["User"] = relationship(foreign_keys=[referred_id])
+
+    def __repr__(self) -> str:
+        return f"<Referral {self.referrer_id} -> {self.referred_id} +{self.bonus_amount}₽>"
 
 
 class Setting(Base):

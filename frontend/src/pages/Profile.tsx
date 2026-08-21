@@ -10,7 +10,7 @@ import { api } from '../api/client';
 import { Badge, Button, EmptyState, fmtDate, rub, Spinner } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import type { Payment, Services, Stats, TakenOrder } from '../types';
+import type { NotifyLink, Payment, Referral, Services, Stats, TakenOrder } from '../types';
 
 type Tab = 'stats' | 'payments' | 'orders';
 
@@ -132,6 +132,8 @@ export function Profile() {
   const [payments, setPayments] = useState<Payment[] | null>(null);
   const [orders, setOrders] = useState<TakenOrder[] | null>(null);
   const [services, setServices] = useState<Services | null>(null);
+  const [referral, setReferral] = useState<Referral | null>(null);
+  const [pushLink, setPushLink] = useState<NotifyLink | null>(null);
   const [arrivingId, setArrivingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const avatarRef = useRef<HTMLInputElement>(null);
@@ -140,16 +142,20 @@ export function Profile() {
   const loadAll = useCallback(async () => {
     setError(null);
     try {
-      const [s, p, o, sv] = await Promise.all([
+      const [s, p, o, sv, r, n] = await Promise.all([
         api.myStats(),
         api.myPayments(),
         api.myOrders(),
         api.services(),
+        api.myReferral(),
+        api.notifyLink(),
       ]);
       setStats(s);
       setPayments(p);
       setOrders(o);
       setServices(sv);
+      setReferral(r);
+      setPushLink(n);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ошибка загрузки профиля');
     }
@@ -296,6 +302,81 @@ export function Profile() {
           }}
         />
       </div>
+
+      {/* Push-уведомления в Telegram */}
+      <div className="glass rounded-xl p-4 mt-5">
+        <h2 className="text-sm font-bold text-slate-100 uppercase tracking-wide text-slate-400">
+          Push-уведомления о новых заказах
+        </h2>
+        {pushLink === null ? (
+          <Spinner />
+        ) : !pushLink.enabled ? (
+          <p className="text-sm text-slate-400 mt-2">
+            Telegram-бот не настроен. Обратитесь к администратору.
+          </p>
+        ) : pushLink.chat_id ? (
+          <p className="text-sm text-slate-300 mt-2">
+            <Badge color="green">Подключено</Badge>
+            <span className="ml-2">
+              Уведомления о новых заказах приходят в Telegram, даже когда сайт закрыт.
+            </span>
+          </p>
+        ) : (
+          <div className="mt-2">
+            <p className="text-sm text-slate-400">
+              Подключите бота, чтобы получать «Новый заказ в Сургуте, 1500 ₽» на телефон,
+              даже если сайт закрыт.
+            </p>
+            <a href={pushLink.link} target="_blank" rel="noopener noreferrer" className="inline-block mt-3">
+              <Button variant="secondary" className="px-3 py-1.5 text-xs">
+                🔔 Подключить уведомления
+              </Button>
+            </a>
+          </div>
+        )}
+      </div>
+
+      {/* Реферальная программа */}
+      {referral && (
+        <div className="glass rounded-xl p-4 mt-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="text-sm font-bold text-slate-100 uppercase tracking-wide text-slate-400">
+                Реферальная программа
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Пригласите грузчика — получите {rub(referral.bonus)} на баланс за каждого.
+              </p>
+            </div>
+            <div className="text-right">
+              <div className="text-xl font-extrabold text-brand-300">
+                {rub(referral.total_bonus)}
+              </div>
+              <div className="text-xs text-slate-400">начислено · {referral.referrals_count} приглашено</div>
+            </div>
+          </div>
+          <div className="mt-3 flex items-center gap-2 flex-wrap">
+            <code className="rounded-lg bg-slate-800/80 px-3 py-2 text-sm font-mono text-slate-200">
+              {referral.code}
+            </code>
+            <Button
+              variant="secondary"
+              className="px-3 py-1.5 text-xs"
+              onClick={() => {
+                void navigator.clipboard
+                  .writeText(referral.link)
+                  .then(() => notify('Ссылка скопирована', 'success'))
+                  .catch(() => notify('Не удалось скопировать', 'error'));
+              }}
+            >
+              Копировать ссылку
+            </Button>
+            <p className="text-xs text-slate-400">
+              Друг вставит код при регистрации — бонус начислится вам обоим.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Реквизиты банка */}
       {services && (

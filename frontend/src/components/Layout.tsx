@@ -8,6 +8,9 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { rub } from './ui';
 
+// Имя Telegram-бота для ссылки «Написать админу» (кэш между переходами)
+let tgUsernameCache: string | null = null;
+
 // Инициалы для аватара
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -41,7 +44,27 @@ const NAV_ITEMS = [
 export function Layout() {
   const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
+  const [tgUsername, setTgUsername] = useState<string>('');
   const location = useLocation();
+
+  // Имя бота берём из корневого эндпоинта API (один раз, с кэшем)
+  useEffect(() => {
+    if (tgUsernameCache !== null) {
+      setTgUsername(tgUsernameCache);
+      return;
+    }
+    fetch('/api', { headers: { Accept: 'application/json' } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { telegram?: { username?: string } } | null) => {
+        const name = ((data?.telegram?.username) || '').trim();
+        tgUsernameCache = name;
+        setTgUsername(name);
+      })
+      .catch(() => {
+        tgUsernameCache = '';
+        setTgUsername('');
+      });
+  }, []);
 
   // Закрываем мобильное меню при переходе по ссылке
   useEffect(() => {
@@ -70,6 +93,17 @@ export function Layout() {
           </div>
           <div className="text-[11px] font-semibold leading-none text-slate-400">сервис заказов</div>
         </div>
+      </Link>
+
+      {/* Кнопка «Разместить заказ» — для заказчиков, без авторизации */}
+      <Link
+        to="/place-order"
+        className="mt-5 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-3 text-sm font-bold text-white shadow-glow-emerald transition-all duration-150 hover:-translate-y-px hover:shadow-[0_0_26px_rgba(52,211,153,0.6)] active:scale-[0.98]"
+      >
+        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 5v14m-7-7h14" />
+        </svg>
+        Разместить заказ
       </Link>
 
       {/* Карточка профиля */}
@@ -162,6 +196,21 @@ export function Layout() {
         </button>
       )}
 
+      {/* Ссылка «Написать админу» — прямая связь с администратором в Telegram */}
+      {tgUsername && (
+        <a
+          href={`https://t.me/${tgUsername}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-4 flex items-center gap-3 rounded-xl bg-sky-500/10 px-3.5 py-2.5 text-sm font-semibold text-sky-300 ring-1 ring-sky-400/25 transition-all duration-150 hover:-translate-y-px hover:bg-sky-500/20 hover:shadow-[0_2px_12px_rgba(56,189,248,0.25)]"
+        >
+          <svg className="h-5 w-5 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M21.94 4.14a1.5 1.5 0 00-2.05-1.33L2.87 9.72a1.5 1.5 0 00.24 2.87l4.2.93 1.6 5.13a1.5 1.5 0 002.4.65l2.47-2.16 4.13 3.02a1.5 1.5 0 002.3-.94l3.73-15.08zM5.5 11.65l12.9-5.02-7.45 6.92-1.07 3.43-1.02-3.3-3.36-.03z" />
+          </svg>
+          Написать админу
+        </a>
+      )}
+
       <div className="mt-4 px-2 text-[10px] leading-relaxed text-slate-400">
         Заказы видны только на сегодня · Оплата по реквизитам банка
       </div>
@@ -181,6 +230,12 @@ export function Layout() {
           <span className="bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 bg-clip-text text-transparent">
             Грузчики
           </span>
+        </Link>
+        <Link
+          to="/place-order"
+          className="rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-3 py-2 text-xs font-bold text-white shadow-glow-emerald transition-all duration-150 hover:scale-105 active:scale-95"
+        >
+          Заказать
         </Link>
         <button
           onClick={() => setOpen((v) => !v)}

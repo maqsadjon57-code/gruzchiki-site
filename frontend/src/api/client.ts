@@ -11,11 +11,20 @@ import type {
   AdminStats,
   AggregatorFeed,
   AggregatorSources,
+  CustomerOrderCreate,
   MessageOut,
+  NotifyLink,
   Order,
   OrderList,
   Payment,
+  PromoCode,
+  PromoCodeCreate,
+  PromoCodeUpdate,
+  Referral,
   RegionWithCount,
+  Review,
+  ReviewCreate,
+  ReviewLoaderCreate,
   Services,
   Settings,
   Stats,
@@ -47,6 +56,40 @@ export class ApiError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+// Скачать бинарный файл (Excel и т.п.) с авторизацией и сохранить через blob
+async function download(url: string, fallbackName = 'file.xlsx'): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch(`/api${url}`, { method: 'GET', headers });
+  if (!res.ok) {
+    let detail = `Ошибка запроса (${res.status})`;
+    try {
+      const data = await res.json();
+      if (data && typeof data === 'object' && 'detail' in data) {
+        detail = String((data as { detail: unknown }).detail);
+      }
+    } catch {
+      /* тело не JSON — оставляем стандартное сообщение */
+    }
+    throw new ApiError(res.status, detail);
+  }
+
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
+  const filename = match ? match[1].replace(/^"|"$/g, '') : fallbackName;
+
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
 }
 
 async function request<T>(method: string, url: string, body?: unknown, isForm = false): Promise<T> {
@@ -103,8 +146,13 @@ async function request<T>(method: string, url: string, body?: unknown, isForm = 
 
 export const api = {
   // --- Авторизация ---
-  register: (data: { phone: string; name: string; password: string; email?: string }) =>
-    request<TokenOut>('POST', '/auth/register', data),
+  register: (data: {
+    phone: string;
+    name: string;
+    password: string;
+    email?: string;
+    promo_code?: string | null;
+  }) => request<TokenOut>('POST', '/auth/register', data),
 
   login: (data: { phone: string; password: string }) =>
     request<TokenOut>('POST', '/auth/login', data),
@@ -127,6 +175,10 @@ export const api = {
   arriveOrder: (id: number) => request<MessageOut>('POST', `/orders/${id}/arrived`),
 
   categories: () => request<string[]>('GET', '/orders/categories'),
+
+  // Публичная форма заказчика — без авторизации
+  createCustomerOrder: (data: CustomerOrderCreate) =>
+    request<Order>('POST', '/orders/public', data),
 
   regions: () => request<RegionWithCount[]>('GET', '/regions'),
 
@@ -168,6 +220,30 @@ export const api = {
   myOrders: () => request<TakenOrder[]>('GET', '/profile/orders'),
 
   myStats: () => request<Stats>('GET', '/profile/stats'),
+
+  // Реферальная программа и push-уведомления в Telegram
+  myReferral: () => request<Referral>('GET', '/profile/referral'),
+
+  notifyLink: () => request<NotifyLink>('GET', '/profile/notify-link'),
+
+  // --- Отзывы и рейтинги ---
+  // Отзыв заказчика на грузчика (по выполненному заказу)
+  submitReview: (orderId: number, data: ReviewCreate) =>
+    request<Review>('POST', `/reviews/orders/${orderId}/review`, data),
+
+  // Отзыв грузчика на заказчика
+  submitLoaderReview: (orderId: number, data: ReviewLoaderCreate) =>
+    request<Review>('POST', `/reviews/orders/${orderId}/review-loader`, data),
+
+  // Отзывы по заказу (заказчик видит отзывы заказчиков, админ — все)
+  orderReviews: (orderId: number) =>
+    request<Review[]>('GET', `/reviews/orders/${orderId}/reviews`),
+
+  // Публичные отзывы заказчиков о грузчике
+  userReviews: (userId: number) => request<Review[]>('GET', `/reviews/users/${userId}/reviews`),
+
+  // Все отзывы (только для админа)
+  adminReviews: () => request<Review[]>('GET', '/reviews/admin/reviews'),
 
   // ------------------------- Админка -------------------------
 
@@ -213,6 +289,21 @@ export const api = {
     request<Settings>('PUT', '/admin/settings', data),
 
   adminStats: () => request<AdminStats>('GET', '/admin/stats'),
+
+  // Выгрузка статистики в Excel (скачивание файла)
+  adminStatsExport: () => download('/admin/stats/export', 'stats.xlsx'),
+
+  // --- Промокоды (админка) ---
+  adminPromos: () => request<PromoCode[]>('GET', '/admin/promocodes'),
+
+  adminCreatePromo: (data: PromoCodeCreate) =>
+    request<PromoCode>('POST', '/admin/promocodes', data),
+
+  adminUpdatePromo: (promoId: number, data: PromoCodeUpdate) =>
+    request<PromoCode>('PATCH', `/admin/promocodes/${promoId}`, data),
+
+  adminDeletePromo: (promoId: number) =>
+    request<MessageOut>('DELETE', `/admin/promocodes/${promoId}`),
 
   adminLogs: () => request<AdminLog[]>('GET', '/admin/logs'),
 

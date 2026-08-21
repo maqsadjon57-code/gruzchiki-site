@@ -22,6 +22,10 @@ class RegisterRequest(BaseModel):
     name: str = Field(..., min_length=2, max_length=120, description="Имя")
     password: str = Field(..., min_length=6, max_length=128, description="Пароль")
     email: str | None = Field(None, max_length=120, description="Email (необязательно)")
+    # Промокод или реферальный код (публичный ID пригласившего, напр. GRUZ-123456)
+    promo_code: str | None = Field(
+        None, max_length=40, description="Промокод или реферальный код пригласившего"
+    )
 
 
 class LoginRequest(BaseModel):
@@ -54,6 +58,41 @@ class OrderCreate(BaseModel):
     category: str = "прочее"
     urgency: bool = False
     description: str | None = Field(None, max_length=2000)
+    # Координаты точки выполнения (заполняются через кнопку геолокации)
+    latitude: float | None = Field(None, ge=-90, le=90, description="Широта")
+    longitude: float | None = Field(None, ge=-180, le=180, description="Долгота")
+
+
+class CustomerOrderCreate(BaseModel):
+    """Заказ, размещаемый заказчиком через публичную форму на сайте.
+
+    Поля те же, что у OrderCreate (адрес, вес, категория, цена), плюс
+    имя и телефон заказчика. Авторизация не требуется.
+    """
+
+    region_name: str = Field(..., min_length=1, max_length=120,
+                             description="Название региона (города)")
+    name: str = Field(..., min_length=1, max_length=120, description="Имя заказчика")
+    phone: str = Field(..., min_length=6, max_length=20, description="Телефон заказчика")
+    street: str = Field(..., min_length=1, max_length=200)
+    house: str = Field(..., min_length=1, max_length=30)
+    apartment: str | None = Field(None, max_length=30)
+    entrance: str | None = Field(None, max_length=30)
+    floor: str | None = Field(None, max_length=30)
+    landmarks: str | None = Field(None, max_length=300)
+    price: int = Field(..., ge=0, description="Стоимость заказа, руб.")
+    hourly_rate: int | None = Field(None, ge=0, description="Почасовая ставка, руб./час")
+    weight: int | None = Field(None, ge=0, description="Вес груза, кг")
+    deadline: str | None = Field(None, max_length=10, pattern=r"^\d{1,2}:\d{2}$",
+                                 description="Дедлайн: до скольки завершить заказ, формат HH:MM")
+    duration_min: int | None = Field(None, ge=0, description="Мин. длительность работ, мин.")
+    duration_max: int | None = Field(None, ge=0, description="Макс. длительность работ, мин.")
+    category: str = "прочее"
+    urgency: bool = False
+    description: str | None = Field(None, max_length=2000)
+    # Координаты точки выполнения (заполняются через кнопку геолокации)
+    latitude: float | None = Field(None, ge=-90, le=90, description="Широта")
+    longitude: float | None = Field(None, ge=-180, le=180, description="Долгота")
 
 
 class TopUpRequest(BaseModel):
@@ -95,6 +134,8 @@ class OrderOut(BaseModel):
     # Телефон заказчика: скрыт (null), если грузчик не оплатил доступ
     phone: str | None = None
     phone_available: bool = False
+    # Имя заказчика (заполняется в форме «Разместить заказ», для админа)
+    customer_name: str | None = None
     price: int
     hourly_rate: int | None
     weight: int | None
@@ -105,6 +146,9 @@ class OrderOut(BaseModel):
     category: str
     urgency: bool
     description: str | None
+    # Координаты точки выполнения (для карты и сортировки по расстоянию)
+    latitude: float | None = None
+    longitude: float | None = None
     published_at: datetime
     status: str
     time_label: str = ""
@@ -149,6 +193,9 @@ class UserOut(BaseModel):
     is_blocked: bool
     is_admin: bool
     created_at: datetime
+    # Средняя оценка и количество отзывов (рейтинг грузчика)
+    rating_avg: float | None = None
+    rating_count: int = 0
 
     @computed_field
     @property
@@ -198,6 +245,9 @@ class TopUserOut(BaseModel):
     taken: int  # всего взято заказов
     in_top20: bool  # оплачен ли режим ТОП-20 сейчас
     top20_until: datetime | None = None
+    # Средняя оценка и количество отзывов (рейтинг грузчика)
+    rating_avg: float | None = None
+    rating_count: int = 0
 
 
 class TakenOrderOut(BaseModel):
@@ -232,3 +282,88 @@ class MessageOut(BaseModel):
 
     message: str
     detail: dict | None = None
+
+# ========================== ОТЗЫВЫ И РЕЙТИНГИ ============================
+
+
+class ReviewCreate(BaseModel):
+    """Отзыв заказчика на грузчика (по выполненному заказу)."""
+
+    # Телефон заказчика — сверяется с телефоном в заказе
+    phone: str = Field(..., min_length=6, max_length=20, description="Телефон заказчика")
+    rating: int = Field(..., ge=1, le=5, description="Оценка от 1 до 5")
+    comment: str | None = Field(None, max_length=1000, description="Комментарий")
+
+
+class ReviewLoaderCreate(BaseModel):
+    """Отзыв грузчика на заказчика (по выполненному заказу)."""
+
+    rating: int = Field(..., ge=1, le=5, description="Оценка от 1 до 5")
+    comment: str | None = Field(None, max_length=1000, description="Комментарий")
+
+
+class ReviewOut(BaseModel):
+    """Отзыв в ответе API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    order_id: int
+    from_role: str  # customer / loader
+    # Кто оставил отзыв (для customer — имя заказчика из заказа)
+    from_name: str | None = None
+    rating: int
+    comment: str | None
+    created_at: datetime
+
+
+# ========================== ПРОМОКОДЫ ====================================
+
+
+class PromoCodeCreate(BaseModel):
+    """Создание промокода администратором."""
+
+    code: str = Field(..., min_length=2, max_length=40,
+                      description="Код (без пробелов, регистр не важен)")
+    bonus: int = Field(..., ge=1, description="Бонус на баланс при активации, руб.")
+    max_uses: int = Field(0, ge=0, description="Лимит активаций (0 — без ограничений)")
+
+
+class PromoCodeUpdate(BaseModel):
+    """Частичное обновление промокода администратором."""
+
+    bonus: int | None = Field(None, ge=1, description="Бонус на баланс при активации, руб.")
+    max_uses: int | None = Field(None, ge=0, description="Лимит активаций (0 — без ограничений)")
+    is_active: bool | None = Field(None, description="Включить/выключить промокод")
+
+
+class PromoCodeOut(BaseModel):
+    """Промокод в ответе API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    code: str
+    bonus: int
+    max_uses: int
+    uses_count: int
+    is_active: bool
+    created_at: datetime
+
+
+# ========================== РЕФЕРАЛЬНАЯ ПРОГРАММА ========================
+
+
+class ReferralOut(BaseModel):
+    """Информация о реферальной программе для личного кабинета."""
+
+    # Публичный ID грузчика — это и есть его реферальный код
+    code: str
+    # Ссылка на регистрацию с этим кодом
+    link: str
+    # Бонус за каждого приведённого грузчика, руб.
+    bonus: int
+    # Сколько грузчиков зарегистрировалось по этой ссылке
+    referrals_count: int
+    # Сколько бонуса всего начислено
+    total_bonus: int

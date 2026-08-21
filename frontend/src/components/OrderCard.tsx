@@ -18,7 +18,13 @@ const CATEGORY_SHORT: Record<string, string> = {
   прочее: 'Прочее',
 };
 
-export function OrderCard({ order }: { order: Order }) {
+type OrderCardProps = {
+  order: Order;
+  /** Расстояние от грузчика до точки заказа (км) — для сортировки по геолокации */
+  distanceKm?: number | null;
+};
+
+export function OrderCard({ order, distanceKm }: OrderCardProps) {
   // Полный адрес одной строкой: улица, дом (+квартира/подъезд при наличии)
   const address = [order.street, order.house, order.apartment && `кв. ${order.apartment}`]
     .filter(Boolean)
@@ -64,6 +70,10 @@ export function OrderCard({ order }: { order: Order }) {
         {order.urgency && <Badge color="red">Срочный</Badge>}
         {/* «До скольки» завершить заказ и длительность работ */}
         {order.deadline && <Badge color="orange">⏰ до {order.deadline}</Badge>}
+        {/* Расстояние до заказа, если геолокация разрешена (≈1.2 км) */}
+        {distanceKm != null && (
+          <Badge color="cyan">📍 ≈{distanceKm < 1 ? Math.round(distanceKm * 1000) + ' м' : distanceKm.toFixed(1) + ' км'}</Badge>
+        )}
         {order.duration_min != null || order.duration_max != null ? (
           <Badge color="cyan">
             ⏱{' '}

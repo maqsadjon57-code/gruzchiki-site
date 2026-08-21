@@ -95,6 +95,12 @@ class Settings:
     # Если токен не указан, бот отключён, сайт работает без него.
     TELEGRAM_BOT_TOKEN: str = _env("TELEGRAM_BOT_TOKEN", "")
     TELEGRAM_ADMIN_CHAT_ID: str = _env("TELEGRAM_ADMIN_CHAT_ID", "")
+    # Имя бота без @ (например gruzchiki_bot). Если не задано — определяется
+    # автоматически через getMe при старте (кнопка «Написать админу» в шапке).
+    TELEGRAM_BOT_USERNAME: str = _env("TELEGRAM_BOT_USERNAME", "")
+    # Публичный адрес сайта — используется в кнопке «Посмотреть заказ»
+    # в push-уведомлениях грузчикам (например https://gruzchiki.onrender.com).
+    SITE_URL: str = _env("SITE_URL", "http://localhost:5173")
 
     # --- CORS ---------------------------------------------------------------
     # Разрешённые источники для фронтенда
@@ -103,6 +109,10 @@ class Settings:
         for o in _env("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
         if o.strip()
     ]
+
+    # --- Реферальная программа ----------------------------------------------
+    # Бонус пригласившему и новому грузчику за регистрацию по реферальной ссылке
+    REFERRAL_BONUS: int = int(_env("REFERRAL_BONUS", "100"))
 
     # --- Внешние интеграции ------------------------------------------------
     # Ключ API SuperJob (https://api.superjob.ru) — включает SuperJob в админ-ленту.

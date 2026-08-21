@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import Base, engine
-from .models import AdminLog, Order, Region, Setting, User
+from .models import AdminLog, Order, PromoCode, Region, Setting, User
 from .security import hash_password
 
 logger = logging.getLogger("gruzchiki.seed")
@@ -96,6 +96,16 @@ _MIGRATIONS = [
     # Когда грузчик нажал «Я на месте»
     ("taken_orders", "arrived_at", "DATETIME"),
     ("taken_external_orders", "arrived_at", "DATETIME"),
+    # Имя заказчика (форма «Разместить заказ») и источник заказа: admin/form
+    ("orders", "customer_name", "VARCHAR(120)"),
+    ("orders", "source", "VARCHAR(20) DEFAULT 'admin'"),
+    # Push-уведомления грузчикам через Telegram-бота (chat_id подписки)
+    ("users", "telegram_chat_id", "BIGINT"),
+    # Реферальная программа: кто пригласил этого грузчика
+    ("users", "referred_by", "INTEGER"),
+    # Координаты точки выполнения (для карты и сортировки по расстоянию)
+    ("orders", "latitude", "FLOAT"),
+    ("orders", "longitude", "FLOAT"),
 ]
 
 
@@ -134,6 +144,11 @@ def seed(db: Session) -> None:
         db.add(Setting(key="phone_unlock_amount", value=str(settings.PHONE_UNLOCK_AMOUNT)))
     if db.get(Setting, "top20_price") is None:
         db.add(Setting(key="top20_price", value=str(settings.TOP20_DAILY_PRICE)))
+
+    # --- Стартовый промокод (идемпотентно) ---
+    if db.scalar(select(PromoCode).where(PromoCode.code == "START100")) is None:
+        db.add(PromoCode(code="START100", bonus=100, max_uses=0, is_active=True))
+        logger.info("Создан стартовый промокод START100 (+100₽)")
 
     # --- Администратор ---
     admin = db.scalar(select(User).where(User.phone == settings.ADMIN_PHONE))

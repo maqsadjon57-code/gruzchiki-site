@@ -4,7 +4,7 @@
 // ============================================================
 
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Button, Field } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -18,7 +18,12 @@ export function Register() {
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [promoCode, setPromoCode] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Реферальная ссылка вида /register?ref=GRUZ-123456 подставляет код
+  const [searchParams] = useSearchParams();
+  const [initialPromo] = useState(() => searchParams.get('ref') || '');
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -28,7 +33,13 @@ export function Register() {
     }
     setBusy(true);
     try {
-      const data = await register({ name, phone: phone.trim(), email: email || undefined, password });
+      const data = await register({
+        name,
+        phone: phone.trim(),
+        email: email || undefined,
+        password,
+        promo_code: promoCode.trim() || initialPromo || undefined,
+      });
       notify(`Аккаунт создан, ${data.user.name}!`, 'success');
       navigate('/');
     } catch (err) {
@@ -76,6 +87,13 @@ export function Register() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
+          />
+          <Field
+            label="Промокод или код друга"
+            placeholder="START100 или GRUZ-123456"
+            value={promoCode || initialPromo}
+            onChange={(e) => setPromoCode(e.target.value)}
+            hint="Введите промокод или реферальный код грузчика — бонус начислится на баланс сразу после регистрации."
           />
           <Button type="submit" disabled={busy}>
             {busy ? 'Создаём аккаунт…' : 'Зарегистрироваться'}

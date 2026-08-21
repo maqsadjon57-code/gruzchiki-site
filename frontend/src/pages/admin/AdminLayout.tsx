@@ -11,6 +11,7 @@ const NAV = [
   { to: '/admin/orders', label: 'Заказы' },
   { to: '/admin/users', label: 'Пользователи' },
   { to: '/admin/payments', label: 'Пополнения' },
+  { to: '/admin/promocodes', label: 'Промокоды' },
   { to: '/admin/regions', label: 'Регионы' },
   { to: '/admin/settings', label: 'Настройки' },
   { to: '/admin/logs', label: 'Журнал' },

@@ -8,3 +8,5 @@ python-multipart>=0.0.9
 requests>=2.31
 # PostgreSQL (используется в продакшене на бесплатном хостинге)
 psycopg2-binary>=2.9
+# Выгрузка статистики в Excel для отчётности (админ-панель)
+openpyxl>=3.1
