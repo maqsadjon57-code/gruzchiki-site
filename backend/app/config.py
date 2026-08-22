@@ -121,7 +121,7 @@ class Settings:
     # Получить: https://api.superjob.ru/register
     SUPERJOB_API_KEY: str = _env("SUPERJOB_API_KEY", "")
     # Максимум заказов в ленте (публичной и админской)
-    FEED_LIMIT: int = int(_env("FEED_LIMIT", "150"))
+    FEED_LIMIT: int = int(_env("FEED_LIMIT", "1000"))
 
     # --- СБП (QR-оплата) ------------------------------------------------------
     # Номер телефона для оплаты по СБП (только цифры)

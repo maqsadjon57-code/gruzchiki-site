@@ -134,10 +134,10 @@ export interface Stats {
   commission_paid: number;
 }
 
-// Регион/город с числом заказов на сегодня
+// Регион/город с числом активных заказов
 export interface RegionWithCount {
   name: string;
-  orders_today: number;
+  orders_count: number;
 }
 
 // Админ-статистика (общий дашборд с графиками)

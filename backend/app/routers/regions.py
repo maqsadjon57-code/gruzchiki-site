@@ -2,11 +2,9 @@
 Публичный роутер регионов.
 
 Отдаёт список городов для фильтра на главной странице
-и количество сегодняшних заказов по каждому городу.
+и количество активных заказов по каждому городу.
 """
 from __future__ import annotations
-
-from datetime import datetime, time, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
@@ -22,19 +20,14 @@ router = APIRouter(prefix="/regions", tags=["regions"])
 @router.get("", summary="Список регионов (публичный)")
 def list_regions(db: Session = Depends(get_db)):
     """
-    Активные регионы с количеством заказов на сегодня.
+    Активные регионы с количеством активных заказов.
     Используется для выпадающего фильтра на главной странице.
     """
-    now = datetime.now(timezone.utc)
-    start = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
-    end = datetime.combine(now.date(), time.max, tzinfo=timezone.utc)
-
     rows = db.execute(
         select(Region.name, func.count(Order.id))
         .join(Order, Order.region_id == Region.id)
         .where(Region.is_active.is_(True),
-               Order.status == "active",
-               Order.published_at.between(start, end))
+               Order.status == "active")
         .group_by(Region.name)
         .order_by(Region.name)
     ).all()
@@ -52,15 +45,15 @@ def list_regions(db: Session = Depends(get_db)):
     result = []
     seen = set()
     for r in all_regions:
-        result.append({"name": r.name, "orders_today": counts.get(r.name, 0)})
+        result.append({"name": r.name, "orders_count": counts.get(r.name, 0)})
         seen.add(r.name)
 
     # Новые города, которых нет в справочнике регионов сайта
     for name, count in sorted(counts.items(), key=lambda kv: -kv[1]):
         if name not in seen:
-            result.append({"name": name, "orders_today": count})
+            result.append({"name": name, "orders_count": count})
             seen.add(name)
 
     # Сортируем: сначала регионы с заказами (Сургут — главный, всегда первый)
-    result.sort(key=lambda x: (-1 if x["name"] == "Сургут" else 0, -x["orders_today"], x["name"]))
+    result.sort(key=lambda x: (-1 if x["name"] == "Сургут" else 0, -x["orders_count"], x["name"]))
     return result

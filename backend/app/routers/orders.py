@@ -2,15 +2,16 @@
 Роутер заказов: лента, детали, взятие заказа.
 
 Правила:
-  * В ленте показываются ТОЛЬКО заказы на сегодня (дата публикации
-    равна текущей дате сервера). Старые и будущие не отображаются.
+  * В ленте показываются ВСЕ активные заказы (независимо от даты
+    публикации). Старые активные заказы остаются видимыми, пока их
+    не возьмут или не завершат.
   * Телефон заказчика скрыт, пока у грузчика баланс < 100 ₽.
   * Взять заказ можно, только если баланс >= комиссии (по умолчанию 100 ₽);
     комиссия списывается с баланса, заказ помечается как «взят».
 """
 from __future__ import annotations
 
-from datetime import datetime, time, timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
@@ -57,26 +58,12 @@ def get_commission(db: Session) -> int:
         return settings.DEFAULT_COMMISSION
 
 
-def _today_bounds() -> tuple[datetime, datetime]:
-    """
-    Вернуть начало и конец сегодняшнего дня (UTC) для фильтра заказов.
-
-    ВАЖНО: SQLite хранит datetime без временной зоны (naive), а PostgreSQL —
-    с зоной (aware). Чтобы сравнения работали на обеих СУБД, возвращаем
-    naive-значения UTC.
-    """
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    start = datetime.combine(now.date(), time.min)
-    end = datetime.combine(now.date(), time.max)
-    return start, end
-
-
-def _get_region_counts(db: Session, start: datetime, end: datetime) -> list[dict]:
+def _get_region_counts(db: Session) -> list[dict]:
     """Посчитать количество активных заказов по каждому региону (для фильтра)."""
     rows = db.execute(
         select(Region.name, func.count(Order.id))
         .join(Order, Order.region_id == Region.id)
-        .where(Order.status == "active", Order.published_at.between(start, end))
+        .where(Order.status == "active")
         .group_by(Region.name)
         .order_by(func.count(Order.id).desc())
     ).all()
@@ -94,13 +81,13 @@ def _dt_key(item: dict) -> float:
         return 0.0
 
 
-def _merged_region_counts(db: Session, start: datetime, end: datetime) -> list[dict]:
+def _merged_region_counts(db: Session) -> list[dict]:
     """Счётчики по регионам: локальные заказы + заказы площадки ГрузАгг.
 
     Сургут — всегда первый (главный город), остальные — по убыванию.
     """
     counts: dict[str, int] = {
-        row["region"]: row["count"] for row in _get_region_counts(db, start, end)
+        row["region"]: row["count"] for row in _get_region_counts(db)
     }
     for row in order_sources.external_region_counts(limit=50):
         counts[row["region"]] = counts.get(row["region"], 0) + row["count"]
@@ -112,7 +99,7 @@ def _merged_region_counts(db: Session, start: datetime, end: datetime) -> list[d
     return [{"region": name, "count": count} for name, count in ordered]
 
 
-@router.get("", response_model=OrderListOut, summary="Лента заказов (только сегодня)")
+@router.get("", response_model=OrderListOut, summary="Лента заказов (все активные)")
 def list_orders(
     region: str | None = Query(None, description="Фильтр по региону (город)"),
     price_from: int | None = Query(None, ge=0),
@@ -124,18 +111,16 @@ def list_orders(
     db: Session = Depends(get_db),
 ):
     """
-    Список заказов на сегодня с фильтрами.
+    Список всех активных заказов с фильтрами.
 
     Если регион не указан — показываются заказы по всем регионам,
     включая реальные заказы площадки ГрузАгг (телефоны скрыты).
     """
-    start, end = _today_bounds()
-
-    # Базовый запрос: только сегодняшние и активные заказы
+    # Базовый запрос: все активные заказы (без фильтра по дате)
     q = (
         select(Order)
         .options(joinedload(Order.region))
-        .where(Order.published_at.between(start, end), Order.status == "active")
+        .where(Order.status == "active")
     )
 
     # --- Применяем фильтры ---
@@ -203,8 +188,8 @@ def list_orders(
 
     items = items[: settings.FEED_LIMIT]
 
-    # Счётчики по регионам для фильтра (на весь день, без поиска)
-    region_counts = _merged_region_counts(db, start, end)
+    # Счётчики по регионам для фильтра (по всем активным заказам, без поиска)
+    region_counts = _merged_region_counts(db)
 
     return OrderListOut(
         orders=items,
@@ -434,14 +419,6 @@ async def take_order(
     if order.status != "active":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail="Заказ уже взят или завершён")
-
-    # Не даём взять заказ, опубликованный не сегодня (защита от дурака)
-    start, end = _today_bounds()
-    # SQLite отдаёт naive-значения, PostgreSQL — aware; убираем зону для сравнения
-    published = order.published_at.replace(tzinfo=None) if order.published_at.tzinfo else order.published_at
-    if not (start <= published <= end):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                            detail="Заказ уже не актуален (не сегодняшний)")
 
     commission = get_commission(db)
     if current_user.balance < commission:

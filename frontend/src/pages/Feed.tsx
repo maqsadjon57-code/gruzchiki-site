@@ -1,7 +1,7 @@
 // ============================================================
-// Главная страница — лента сегодняшних заказов.
+// Главная страница — лента всех активных заказов.
 // Фильтры: регион (город), цена, категория, срочность, поиск.
-// Регионы приходят со счётчиком заказов на сегодня.
+// Регионы приходят со счётчиком активных заказов.
 // Лента обновляется автоматически через WebSocket.
 // ============================================================
 
@@ -111,7 +111,7 @@ export function Feed() {
   });
 
   // Первичная загрузка списка регионов — регион с заказами держим в фильтре
-  const [regions, setRegions] = useState<{ name: string; orders_today: number }[]>([]);
+  const [regions, setRegions] = useState<{ name: string; orders_count: number }[]>([]);
   useEffect(() => {
     api
       .regions()
@@ -211,7 +211,7 @@ export function Feed() {
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.55)]">
-            {hour !== null ? `Заказы на ${String(hour).padStart(2, '0')}:00` : 'Заказы на сегодня'}
+            {hour !== null ? `Заказы на ${String(hour).padStart(2, '0')}:00` : 'Все заказы'}
           </h1>
           <p className="text-sm text-slate-200 mt-1 drop-shadow-[0_1px_6px_rgba(0,0,0,0.55)]">
             {data ? `Найдено заказов: ${hour !== null ? visibleOrders.length : data.total}` : 'Загружаем заказы…'}
@@ -279,7 +279,7 @@ export function Feed() {
           <option value="">Все регионы</option>
           {regions.map((r) => (
             <option key={r.name} value={r.name}>
-              {r.name} ({r.orders_today})
+              {r.name} ({r.orders_count})
             </option>
           ))}
         </select>
@@ -408,7 +408,7 @@ export function Feed() {
       {!data && !error && <Spinner />}
 
       {data && data.orders.length === 0 && !error && (
-        <EmptyState text="Сегодня заказов в этом регионе нет. Попробуйте другой город или снимите фильтры." />
+        <EmptyState text="Заказов в этом регионе нет. Попробуйте другой город или снимите фильтры." />
       )}
 
       {data && data.orders.length > 0 && visibleOrders.length === 0 && !error && (

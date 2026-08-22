@@ -212,7 +212,7 @@ export function Layout() {
       )}
 
       <div className="mt-4 px-2 text-[10px] leading-relaxed text-slate-400">
-        Заказы видны только на сегодня · Оплата по реквизитам банка
+        Все активные заказы в ленте · Оплата по реквизитам банка
       </div>
     </div>
   );

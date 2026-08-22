@@ -273,7 +273,7 @@ def _resolve_region(db: Session, region_name: str) -> Region:
 
 @router.get("/orders", response_model=list[OrderOut], summary="Все заказы (админ)")
 def admin_orders(
-    date_filter: str | None = Query("today", description="today|all"),
+    date_filter: str | None = Query("all", description="today|all"),
     db: Session = Depends(get_db),
     _admin: User = Depends(get_current_admin),
 ):
@@ -297,7 +297,7 @@ async def admin_create_order(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ):
-    """Создать заказ (например, поступивший по телефону). Публикуется на сегодня."""
+    """Создать заказ (например, поступивший по телефону). Публикуется сразу."""
     region = _resolve_region(db, data.region_name)
     order = Order(
         region_id=region.id,
