@@ -1,0 +1,21 @@
+!!brut.androlib.meta.MetaInfo
+version: 2.9.3
+apkFileName: GmailGenerator-unsigned.apk
+isFrameworkApk: false
+usesFramework:
+  ids:
+  - 1
+  tag: null
+sdkInfo:
+  minSdkVersion: "24"
+  targetSdkVersion: "30"
+packageInfo:
+  forced_package_id: "127"
+  rename_manifest_package: null
+versionInfo:
+  versionCode: "1"
+  versionName: "1.0"
+sharedLibrary: false
+sparseResources: false
+doNotCompress: []
+unknownFiles: {}
