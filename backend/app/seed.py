@@ -15,6 +15,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import inspect, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings
@@ -139,7 +140,7 @@ def init_db() -> None:
     logger.info("Таблицы базы данных готовы")
 
 
-def seed(db: Session) -> None:
+def _seed(db: Session) -> None:
     """Заполнить БД стартовыми данными (идемпотентно)."""
     # --- Настройки по умолчанию (идемпотентно) ---
     if db.get(Setting, "commission") is None:
@@ -157,7 +158,13 @@ def seed(db: Session) -> None:
         logger.info("Создан стартовый промокод START100 (+100₽)")
 
     # --- Администратор ---
-    admin = db.scalar(select(User).where(User.phone == settings.ADMIN_PHONE))
+    # Ищем и по public_id, и по телефону: public_id уникален, а телефон
+    # на момент первого запуска мог отличаться от текущего ADMIN_PHONE.
+    admin = db.scalar(
+        select(User).where(
+            (User.public_id == "ADMIN-000001") | (User.phone == settings.ADMIN_PHONE)
+        )
+    )
     if admin is None:
         admin = User(
             public_id="ADMIN-000001",
@@ -172,6 +179,12 @@ def seed(db: Session) -> None:
                         details="Создан администратор по умолчанию"))
         logger.info("Создан администратор: %s / %s",
                     settings.ADMIN_PHONE, settings.ADMIN_PASSWORD)
+    elif admin.phone != settings.ADMIN_PHONE:
+        logger.warning(
+            "Администратор найден по public_id, но телефон в БД (%s) "
+            "отличается от ADMIN_PHONE (%s)",
+            admin.phone, settings.ADMIN_PHONE,
+        )
 
     # --- Регионы ---
     existing = {r.name for r in db.scalars(select(Region)).all()}
@@ -211,3 +224,26 @@ def seed(db: Session) -> None:
 
     db.commit()
     logger.info("База данных наполнена")
+
+
+def seed(db: Session) -> None:
+    """Наполнить БД стартовыми данными (идемпотентно, устойчиво к гонкам).
+
+    При параллельном старте нескольких инстансов (Render поднимает новый
+    до остановки старого) оба могут попытаться создать одни и те же строки.
+    Ловим IntegrityError, откатываем транзакцию и повторяем — повторный
+    проход увидит уже созданные строки и ничего не продублирует.
+    """
+    try:
+        _seed(db)
+    except IntegrityError:
+        db.rollback()
+        logger.warning("Конкурентный старт: повторяем наполнение БД")
+        try:
+            _seed(db)
+        except IntegrityError:
+            db.rollback()
+            logger.warning(
+                "Повторное наполнение тоже столкнулось с гонкой — "
+                "недостающие данные будут созданы при следующем старте"
+            )
