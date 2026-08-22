@@ -39,6 +39,9 @@ services:
         value: Администратор
       - key: CORS_ORIGINS
         value: http://localhost:5173,http://127.0.0.1:5173
+      # Документация API выключена (Swagger/OpenAPI отдают 404)
+      - key: ENABLE_DOCS
+        value: false
       # Задаётся вручную в дашборде Render после создания сервиса:
       - key: DATABASE_URL
         sync: false

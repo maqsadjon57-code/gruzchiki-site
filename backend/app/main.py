@@ -92,10 +92,15 @@ app = FastAPI(
     description=(
         "API платформы для грузчиков: лента заказов на сегодня, "
         "пополнение баланса, подтверждение оплаты администратором, "
-        "взятие заказов. Документация доступна по адресу /docs"
+        "взятие заказов."
     ),
     version="1.0.0",
     lifespan=lifespan,
+    # Документация API выключена в продакшене (settings.ENABLE_DOCS):
+    # /docs, /redoc и /openapi.json отдают 404, если ENABLE_DOCS != true.
+    docs_url="/docs" if settings.ENABLE_DOCS else None,
+    redoc_url="/redoc" if settings.ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if settings.ENABLE_DOCS else None,
 )
 
 # Разрешаем запросы с фронтенда (localhost:5173 в режиме разработки)
@@ -199,7 +204,7 @@ def root():
     return {
         "name": "Грузчики API",
         "version": "1.0.0",
-        "docs": "/docs",
+        **({"docs": "/docs"} if settings.ENABLE_DOCS else {}),
         "endpoints": [
             "/auth/register", "/auth/login",
             "/orders", "/orders/public", "/orders/{id}", "/orders/{id}/take",

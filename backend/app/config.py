@@ -132,6 +132,11 @@ class Settings:
     # можно отсканировать и оплатить вручную.
     SBP_QR_PAYLOAD: str = _env("SBP_QR_PAYLOAD", "")
 
+    # --- Документация API ------------------------------------------------------
+    # Включает Swagger UI (/docs), ReDoc (/redoc) и OpenAPI-схему (/openapi.json).
+    # В продакшене держите выключенным (по умолчанию False).
+    ENABLE_DOCS: bool = _env("ENABLE_DOCS", "false").lower() in ("1", "true", "yes", "on")
+
     # --- Срочный заказ --------------------------------------------------------
     # Наценка за срочность в публичной форме заказа, руб.
     DEFAULT_URGENT_SURCHARGE: int = int(_env("DEFAULT_URGENT_SURCHARGE", "300"))
