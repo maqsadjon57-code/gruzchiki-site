@@ -151,10 +151,17 @@ class OrderOut(BaseModel):
     longitude: float | None = None
     published_at: datetime
     status: str
+    status_label: str = ""
     time_label: str = ""
     # Откуда заказ: локальный заказ сайта или площадка-агрегатор (ГрузАгг и т.п.)
     source: str | None = None
     is_external: bool = False
+    # Поля вакансий площадок (hh.ru / Работа России / SuperJob): заголовок,
+    # работодатель, зарплата и прямая ссылка на отклик на площадке
+    title: str | None = None
+    company: str | None = None
+    salary_text: str | None = None
+    external_url: str | None = None
     # Кто взял заказ (только в деталях/личном кабинете, не в публичной ленте)
     taken_by: str | None = None
     # Взял ли этот заказ текущий грузчик

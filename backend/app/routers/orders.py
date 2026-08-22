@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..config import settings
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, get_optional_current_user
 from ..models import (
     AdminLog,
     Order,
@@ -90,6 +90,8 @@ def _merged_region_counts(db: Session) -> list[dict]:
         row["region"]: row["count"] for row in _get_region_counts(db)
     }
     for row in order_sources.external_region_counts(limit=50):
+        counts[row["region"]] = counts.get(row["region"], 0) + row["count"]
+    for row in order_sources.vacancy_region_counts(limit=50):
         counts[row["region"]] = counts.get(row["region"], 0) + row["count"]
     surgut = counts.pop("Сургут", None)
     ordered: list[tuple[str, int]] = []
@@ -168,6 +170,16 @@ def list_orders(
         search=search,
         limit=5000 if sort == "new" else 10000,
         sql_order=sort,
+    )
+    # Вакансии площадок (hh.ru / Работа России / SuperJob) — те же id-слоты
+    items += order_sources.vacancies_for_feed(
+        region=region,
+        search=search,
+        category=category,
+        urgency=urgency,
+        price_from=price_from,
+        price_to=price_to,
+        limit=5000 if sort == "new" else 10000,
     )
 
     # Взятые заказы с площадок из ленты убираем (как и локальные со статусом taken)
@@ -277,7 +289,7 @@ async def create_public_order(
 def get_order(
     order_id: int,
     db: Session = Depends(get_db),
-    current_user: User | None = Depends(get_current_user),
+    current_user: User | None = Depends(get_optional_current_user),
 ):
     """
     Детали заказа. Телефон заказчика возвращается только если
@@ -289,6 +301,8 @@ def get_order(
     if order_id < 0:
         ext_id = -order_id - 1_000_000
         item = order_sources.external_order_detail(ext_id)
+        if item is None:
+            item = order_sources.vacancy_order_detail(ext_id)
         if item is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Заказ не найден")
         taken = db.scalar(
@@ -364,6 +378,8 @@ async def take_order(
         ext_id = -order_id - 1_000_000
         item = order_sources.external_order_detail(ext_id)
         if item is None:
+            item = order_sources.vacancy_order_detail(ext_id)
+        if item is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Заказ не найден")
         taken = db.scalar(
             select(TakenExternalOrder).where(TakenExternalOrder.ext_order_id == ext_id)
@@ -371,6 +387,13 @@ async def take_order(
         if taken is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                                 detail="Заказ уже взят")
+
+        # Вакансия площадки: телефона нет, отклик — по ссылке на самой площадке
+        if item.get("external_url"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Это вакансия с площадки: откликнитесь по ссылке на сайте площадки",
+            )
 
         customer_phone = item.get("_customer_phone") or ""
         if not customer_phone.strip():
@@ -476,7 +499,14 @@ def mark_arrived(
         ext_id = -order_id - 1_000_000
         item = order_sources.external_order_detail(ext_id)
         if item is None:
+            item = order_sources.vacancy_order_detail(ext_id)
+        if item is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Заказ не найден")
+        if item.get("external_url"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Это вакансия с площадки — отметить прибытие нельзя",
+            )
         taken = db.scalar(
             select(TakenExternalOrder)
             .options(joinedload(TakenExternalOrder.user))

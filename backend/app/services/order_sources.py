@@ -20,6 +20,7 @@ import os
 import re
 import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -189,37 +190,62 @@ def _fetch_hh(query: str, limit: int) -> list[dict[str, Any]]:
 
 
 def _fetch_trudvsem(query: str, limit: int) -> list[dict[str, Any]]:
-    resp = requests.get(
-        TRUDVSEM_API,
-        params={"text": query, "limit": min(limit, 50), "offset": 0},
-        headers={"User-Agent": USER_AGENT},
-        timeout=8,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    vacancies = (((data or {}).get("results") or {}).get("vacancies")) or []
+    """Вакансии «Работа России» (trudvsem.ru): до 100 за 2 запроса по 50."""
+    limit = max(1, min(int(limit), 100))
     items: list[dict[str, Any]] = []
-    for raw in vacancies[:limit]:
-        v = raw.get("vacancy") or {}
-        company = v.get("company") or {}
-        if isinstance(company, dict):
-            company_name = company.get("name") or company.get("legal_name")
-        else:
-            company_name = str(company)
-        region = v.get("region") or {}
-        items.append(
-            {
-                "id": f"trudvsem-{v.get('id')}",
-                "source": "Работа России",
-                "title": v.get("job-name") or "Вакансия",
-                "company": company_name,
-                "area": region.get("name") if isinstance(region, dict) else str(region),
-                "salary_text": _salary_text(v.get("salary_min"), v.get("salary_max"), "RUR"),
-                "description": _strip_html(str(v.get("snippet") or ""))[:300],
-                "url": v.get("url") or "https://trudvsem.ru",
-                "published_at": v.get("creation-date"),
-            }
+    seen: set[str] = set()
+    for offset in range(0, limit, 50):
+        page_size = min(50, limit - len(items))
+        if page_size <= 0:
+            break
+        resp = requests.get(
+            TRUDVSEM_API,
+            params={"text": query, "limit": page_size, "offset": offset},
+            headers={"User-Agent": USER_AGENT},
+            timeout=8,
         )
+        resp.raise_for_status()
+        data = resp.json()
+        vacancies = (((data or {}).get("results") or {}).get("vacancies")) or []
+        for raw in vacancies:
+            v = raw.get("vacancy") or {}
+            vid = v.get("id")
+            if not vid or vid in seen:
+                continue
+            seen.add(vid)
+            company = v.get("company") or {}
+            if isinstance(company, dict):
+                company_name = company.get("name") or company.get("legal_name")
+            else:
+                company_name = str(company)
+            region = v.get("region") or {}
+            region_name = region.get("name") if isinstance(region, dict) else str(region)
+            # Поладресуемся по городу из блока addresses (там «г Брянск» и т.п.)
+            locations: list[str] = []
+            try:
+                for addr in ((v.get("addresses") or {}).get("address") or []):
+                    loc = (addr or {}).get("location") if isinstance(addr, dict) else None
+                    if loc:
+                        locations.append(str(loc))
+            except (TypeError, AttributeError):
+                locations = []
+            items.append(
+                {
+                    "id": f"trudvsem-{vid}",
+                    "source": "Работа России",
+                    "title": v.get("job-name") or "Вакансия",
+                    "company": company_name,
+                    "area": region_name,
+                    "salary_text": _salary_text(v.get("salary_min"), v.get("salary_max"), "RUR"),
+                    "description": _strip_html(str(v.get("snippet") or ""))[:300],
+                    "url": v.get("vac_url") or v.get("url") or "https://trudvsem.ru/vacancy/" + str(vid),
+                    "published_at": v.get("creation-date"),
+                    # Служебное поле для фильтра по региону (город в адресе)
+                    "match_text": " ".join([region_name] + locations),
+                }
+            )
+        if len(vacancies) < page_size:
+            break
     return items
 
 
@@ -601,7 +627,9 @@ def external_orders_for_feed(
         return []
     try:
         start_of_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        cutoff = start_of_day.strftime("%Y-%m-%d %H:%M:%S.%f")
+        # Окно 72 часа (как у _fetch_gruzagg): заказы, собранные вчера,
+        # не должны пропадать из ленты в начале дня
+        cutoff = (datetime.now() - timedelta(hours=72)).strftime("%Y-%m-%d %H:%M:%S.%f")
         sql = """
             SELECT id, source, address, city, price, duration_min, hourly_rate,
                    weight, category, urgency, description, contact_phone, published_at, region
@@ -678,10 +706,8 @@ def external_region_counts(limit: int = 30) -> list[dict]:
     if con is None:
         return []
     try:
-        cutoff = (
-            datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            .strftime("%Y-%m-%d %H:%M:%S.%f")
-        )
+        # Окно 72 часа: счётчики согласованы с окном ленты
+        cutoff = (datetime.now() - timedelta(hours=72)).strftime("%Y-%m-%d %H:%M:%S.%f")
         rows = con.execute(
             """
             SELECT COALESCE(NULLIF(city, ''), NULLIF(region, ''), 'Без региона'), COUNT(*)
@@ -810,3 +836,296 @@ def fetch_feed(query: str = "грузчик", limit: int = 20, source: str = "al
         "sources": statuses,
         "items": items[:limit],
     }
+def _fetch_hh_match_text(it: dict[str, Any]) -> str:
+    return (it.get("area") or {}).get("name") if isinstance(it.get("area"), dict) else (it.get("area") or "")
+
+
+# --- Вакансии площадок в основной ленте ------------------------------------
+# Вакансии hh.ru / Работа России / SuperJob попадают в публичную ленту с
+# отрицательным id: -(1_000_000 + VACANCY_ID_BASE + slot) = -(901_000_000 + slot).
+# ext_id = -order_id - 1_000_000 = VACANCY_ID_BASE + slot (совпадает с формулой
+# ГрузАгг). Слот стабильно закрепляется за внешней вакансией по ключу
+# «источник|id» на время жизни кэша выдачи — детали открываются тем же id.
+VACANCY_ID_BASE = 900_000_000
+_VACANCY_SLOT_CAP = 5000
+
+_vacancy_slots: dict[str, int] = {}              # ключ «источник|id вакансии» -> слот
+_vacancy_items: dict[int, dict[str, Any]] = {}   # слот -> карточка OrderOut
+_vacancy_counter: int = 0
+
+
+def _vacancy_slot(vacancy_key: str) -> int:
+    """Слот для вакансии: стабильно закрепляет номер и регистрирует его."""
+    global _vacancy_counter
+    slot = _vacancy_slots.get(vacancy_key)
+    if slot is None:
+        slot = len(_vacancy_slots)
+        if slot >= _VACANCY_SLOT_CAP:  # переполнение — сбрасываем реестр
+            _vacancy_slots.clear()
+            _vacancy_items.clear()
+            _vacancy_counter = 0
+            slot = 0
+        _vacancy_slots[vacancy_key] = slot
+        _vacancy_counter = max(_vacancy_counter, slot + 1)
+    return slot
+
+
+def _vacancy_item_id(vacancy_key: str) -> int:
+    """Отрицательный id заказа для вакансии (стабильный слот из реестра)."""
+    return -(1_000_000 + VACANCY_ID_BASE + _vacancy_slot(vacancy_key))
+
+
+def _parse_dt_value(value: Any) -> str | None:
+    """'2025-11-19' или ISO-строка из API -> ISO UTC (для published_at OrderOut)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        v = value
+    else:
+        try:
+            v = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    if v.tzinfo is None:
+        v = v.replace(tzinfo=timezone.utc)
+    return v.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _norm_lower(text: str | None) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower()).replace("ё", "е")
+
+
+def _region_matches(candidate_text: str | None, region: str | None) -> bool:
+    """Совпадение региона: равенство, подстрока или общий токен.
+
+    Примеры: фильтр «Сургут» находит «Ханты-Мансийский автономный округ,
+    г. Сургут, ...»; фильтр «Брянская область» — «Брянская область».
+    """
+    if not region:
+        return True
+    c = _norm_lower(candidate_text)
+    r = _norm_lower(region)
+    if not c:
+        return False
+    if c == r or r in c or c in r:
+        return True
+    c_words = set(re.findall(r"[а-яёa-z0-9-]+", c))
+    return bool(c_words & set(re.findall(r"[а-яёa-z0-9-]+", r)))
+
+
+# Живые источники вакансий для ленты (без локальной базы ГрузАгг)
+_VACANCY_SOURCES: dict[str, Any] = {
+    name: loader for name, loader in _FEED_SOURCES.items() if name != "ГрузАгг"
+}
+
+
+def _vacancy_pool(query: str, limit: int) -> list[dict[str, Any]]:
+    """Сбор вакансий со всех источников параллельно; каждый — через _cached.
+
+    Ключ кэша включает источник, запрос и лимит. Ошибка источника -> пустой
+    список (лента не падает). Дедупликация по id вакансии площадки.
+    """
+    limit = max(1, min(int(limit), 100))
+
+    def load(name: str, loader: Any) -> list[dict[str, Any]]:
+        key = f"vacancy|{name}|{query.lower()}|{limit}"
+        return _cached(key, lambda n=name, q=query, l=limit: loader(q, l))
+
+    results: list[list[dict[str, Any]]] = []
+    with ThreadPoolExecutor(max_workers=len(_VACANCY_SOURCES) or 1) as pool:
+        futs = [pool.submit(load, name, loader) for name, loader in _VACANCY_SOURCES.items()]
+        for f in futs:
+            try:
+                results.append(f.result())
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Ошибка сбора вакансий: %s", exc)
+
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for batch in results:
+        for it in batch:
+            key = it.get("id") or ""
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            items.append(it)
+    return items
+
+
+def _match_text(item: dict[str, Any]) -> str:
+    """Строка для фильтра по региону: регион + адреса + название + описание."""
+    return " ".join(
+        x for x in [
+            item.get("area") or "",
+            item.get("match_text") or "",
+            item.get("title") or "",
+            item.get("description") or "",
+        ]
+    )
+
+
+def _vacancy_to_order(item: dict[str, Any], slot: int) -> dict[str, Any]:
+    """Вакансия площадки -> словарь в формате OrderOut (для ленты и деталей)."""
+    published = _parse_dt_value(item.get("published_at"))
+    region = (item.get("area") or "").strip() or "Россия"
+    title = item.get("title") or "Вакансия"
+    return {
+        "id": -(1_000_000 + VACANCY_ID_BASE + slot),
+        "region": region,
+        "street": title,
+        "house": "",
+        "apartment": None,
+        "entrance": None,
+        "floor": None,
+        "landmarks": None,
+        "phone": None,
+        "phone_available": False,
+        "customer_name": item.get("company") or None,
+        "price": 0,
+        "hourly_rate": None,
+        "weight": None,
+        "deadline": None,
+        "duration_min": None,
+        "duration_max": None,
+        "category": "вакансия",
+        "urgency": False,
+        "description": item.get("description") or None,
+        "published_at": published or datetime.now(timezone.utc),
+        "status": "active",
+        "status_label": "активна",
+        "time_label": "",
+        "source": item.get("source"),
+        "is_external": True,
+        # Флаг вакансии площадки: нет телефона заказчика, отклик — по ссылке
+        "external_url": (item.get("url") or "").strip() or None,
+        "title": title,
+        "company": item.get("company") or None,
+        "salary_text": item.get("salary_text") or None,
+    }
+
+
+# Синонимы профессии для ленты без явного поиска: trudvsem по одному
+# «грузчик» находит мало, а голый запрос по региону даёт шум
+# (водители, продавцы).
+_VACANCY_KEYWORDS = (
+    "грузчик",
+    "разнорабочий",
+    "подсобный рабочий",
+    "комплектовщик",
+    "такелажник",
+)
+_VACANCY_KEYWORD_RE = re.compile(
+    r"грузчик|грузчиц|разнорабоч|подсобн|комплектовщ|такелаж|упаковщик|кладовщик",
+    re.IGNORECASE,
+)
+
+
+def _vacancy_relevant(item: dict[str, Any]) -> bool:
+    """Вакансия про грузчицкую работу: проверяем название на синонимы."""
+    title = (item.get("title") or "").lower()
+    return bool(_VACANCY_KEYWORD_RE.search(title))
+
+
+def vacancies_for_feed(
+    *,
+    region: str | None = None,
+    search: str | None = None,
+    category: str | None = None,
+    urgency: bool | None = None,
+    price_from: int | None = None,
+    price_to: int | None = None,
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    """Вакансии площадок для публичной ленты (формат OrderOut).
+
+    Фильтры цены/категории/срочности к вакансиям не применяются (это не
+    заказы с телефонами) — при активных таких фильтрах возвращаем пусто,
+    чтобы не смешивать несопоставимые сущности. Регион фильтруется по
+    названию/адресу. Поиск (search) ищется в названии вакансии.
+
+    Без поиска опрашиваем несколько синонимов профессии параллельно и
+    оставляем только релевантные вакансии (фильтр по названию).
+    """
+    if category or urgency or price_from is not None or price_to is not None:
+        return []
+    q = (search or "").strip()
+    if q:
+        # Пользовательский поиск: точный запрос + уточнение регионом
+        queries = [q]
+        if region:
+            queries.append(f"{q} {region}")
+    else:
+        # Без поиска — синонимы профессии. Голый запрос региона не делаем:
+        # он даёт много нерелевантного шума.
+        queries = []
+        for kw in _VACANCY_KEYWORDS:
+            queries.append(kw)
+            if region:
+                queries.append(f"{kw} {region}")
+    pool_limit = 40
+
+    raw_items: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=min(6, len(queries) or 1)) as pool:
+        futs = [pool.submit(_vacancy_pool, query, pool_limit) for query in queries]
+        for f in futs:
+            try:
+                raw_items.extend(f.result())
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Ошибка сбора вакансий по запросу: %s", exc)
+
+    items: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for it in raw_items:
+        key = it.get("id") or ""
+        if not key or key in seen_keys:
+            continue
+        seen_keys.add(key)
+        # Без явного поиска показываем только вакансии про грузчицкую работу;
+        # при пользовательском поиске доверяем запросу пользователя.
+        if not q and not _vacancy_relevant(it):
+            continue
+        if not _region_matches(_match_text(it), region):
+            continue
+        slot = _vacancy_slot(key)  # стабильный слот: тот же id в ленте и в деталях
+        item = _vacancy_to_order(it, slot)
+        _vacancy_items[slot] = item
+        items.append(item)
+
+    items.sort(key=lambda i: i.get("published_at") or "", reverse=True)
+    return items[: int(limit)]
+
+
+def vacancy_region_counts(limit: int = 30) -> list[dict]:
+    """Счётчики вакансий по регионам (выдача «грузчик», кэш 10 минут)."""
+    counts: dict[str, int] = {}
+    for it in _vacancy_pool("грузчик", limit=100):
+        region = (it.get("area") or "").strip() or "Россия"
+        counts[region] = counts.get(region, 0) + 1
+    top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[: int(limit)]
+    return [{"region": name, "count": n} for name, n in top]
+def vacancy_order_detail(ext_order_id: int) -> dict[str, Any] | None:
+    """Вакансия площадки по ext_id (VACANCY_ID_BASE + slot) для страницы деталей.
+
+    Карточка берётся из кэша выдачи ленты (слоты стабильны на время жизни
+    кэша). Если кэша нет (перезапуск сервера или прямой переход по ссылке) —
+    реестр слотов пересобирается из стандартной выдачи «грузчик».
+    """
+    slot = ext_order_id - VACANCY_ID_BASE
+    item = _vacancy_items.get(slot)
+    if item is not None:
+        return dict(item)
+    # Прямой переход на страницу без предзагрузки ленты: восстанавливаем
+    # слоты из текущего пула, чтобы найти вакансию по номеру слота.
+    try:
+        for it in _vacancy_pool("грузчик", limit=100):
+            key = it.get("id") or ""
+            if not key:
+                continue
+            s = _vacancy_slot(key)
+            if s not in _vacancy_items:
+                _vacancy_items[s] = _vacancy_to_order(it, s)
+            if s == slot:
+                return dict(_vacancy_items[s])
+    except Exception as exc:  # noqa: BLE001 — источник недоступен, деталей нет
+        logger.warning("Не удалось восстановить вакансию #%s: %s", ext_order_id, exc)
+    return None

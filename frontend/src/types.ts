@@ -27,6 +27,11 @@ export interface Order {
   time_label?: string;     // «Сегодня, 14:30»
   source?: string | null;  // площадка для внешних заказов (ГрузАгг и т.п.)
   is_external?: boolean;   // true — заказ с площадки: без деталей и телефона
+  // Поля вакансии площадки (Работа России / hh.ru / SuperJob)
+  external_url?: string | null;  // ссылка на отклик на площадке
+  title?: string | null;         // название вакансии
+  company?: string | null;       // работодатель
+  salary_text?: string | null;   // зарплата текстом
   deadline: string | null;        // «до скольки» завершить заказ, формат HH:MM
   duration_min: number | null;   // минимальная длительность работы, минут
   duration_max: number | null;   // максимальная длительность работы, минут

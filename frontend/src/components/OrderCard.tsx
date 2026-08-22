@@ -25,6 +25,9 @@ type OrderCardProps = {
 };
 
 export function OrderCard({ order, distanceKm }: OrderCardProps) {
+  // Вакансия площадки (Работа России / hh.ru / SuperJob): показываем
+  // заголовок вакансии, работодателя и зарплату вместо адреса и цены.
+  const isVacancy = Boolean(order.external_url) || (order.is_external && Boolean(order.title));
   // Полный адрес одной строкой: улица, дом (+квартира/подъезд при наличии)
   const address = [order.street, order.house, order.apartment && `кв. ${order.apartment}`]
     .filter(Boolean)
@@ -49,17 +52,30 @@ export function OrderCard({ order, distanceKm }: OrderCardProps) {
             <span className="font-medium">{order.region}</span>
             {timeLabel && <span>· {timeLabel}</span>}
           </div>
-          <h3 className="font-semibold text-slate-100 truncate">{address}</h3>
+          {isVacancy ? (
+            <h3 className="font-semibold text-slate-100 truncate">{order.title ?? 'Вакансия'}</h3>
+          ) : (
+            <h3 className="font-semibold text-slate-100 truncate">{address}</h3>
+          )}
+          {isVacancy && order.company && (
+            <p className="text-xs text-slate-400 mt-0.5 truncate">{order.company}</p>
+          )}
           {order.landmarks && (
             <p className="text-xs text-slate-400 mt-0.5 truncate">Ориентир: {order.landmarks}</p>
           )}
         </div>
         <div className="text-right shrink-0">
-          <div className="bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 bg-clip-text text-lg font-extrabold text-transparent">
-            {rub(order.price)}
-          </div>
-          {order.hourly_rate != null && (
-            <div className="text-xs text-slate-400">{rub(order.hourly_rate)}/час</div>
+          {isVacancy ? (
+            <div className="text-base font-bold text-slate-200">{order.salary_text ?? 'З/п по запросу'}</div>
+          ) : (
+            <>
+              <div className="bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 bg-clip-text text-lg font-extrabold text-transparent">
+                {rub(order.price)}
+              </div>
+              {order.hourly_rate != null && (
+                <div className="text-xs text-slate-400">{rub(order.hourly_rate)}/час</div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -85,8 +101,13 @@ export function OrderCard({ order, distanceKm }: OrderCardProps) {
           </Badge>
         ) : null}
         {order.is_external ? (
-          // Внешние заказы: бейдж площадки, телефон открывается после взятия заказа
-          <Badge color="purple">{order.source ?? 'Площадка'}</Badge>
+          // Вакансии площадок: бейдж «Вакансия» + площадка; отклик — по ссылке
+          isVacancy ? (
+            <Badge color="purple">Вакансия · {order.source ?? 'Площадка'}</Badge>
+          ) : (
+            // Внешние заказы: бейдж площадки, телефон открывается после взятия заказа
+            <Badge color="purple">{order.source ?? 'Площадка'}</Badge>
+          )
         ) : order.phone_available ? (
           <Badge color="green">Телефон открыт</Badge>
         ) : (

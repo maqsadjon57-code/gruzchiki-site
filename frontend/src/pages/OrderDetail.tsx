@@ -190,6 +190,8 @@ export function OrderDetail() {
 
   const isTaken = order.status !== 'active';
   const timeLabel = orderTimeLabel(order.published_at);
+  // Вакансия площадки (Работа России / hh.ru / SuperJob): отклик по внешней ссылке
+  const isVacancy = Boolean(order.external_url) || (order.is_external && Boolean(order.title));
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -213,12 +215,23 @@ export function OrderDetail() {
               <span className="font-medium">{order.region}</span>
               {timeLabel && <span>· {timeLabel}</span>}
             </div>
-            <h1 className="text-xl font-bold text-slate-100 mt-1">Перевозка груза</h1>
+            <h1 className="text-xl font-bold text-slate-100 mt-1">
+              {isVacancy ? (order.title ?? 'Вакансия') : 'Перевозка груза'}
+            </h1>
+            {isVacancy && order.company && (
+              <div className="text-sm text-slate-400 mt-0.5">{order.company}</div>
+            )}
           </div>
-          <div className="text-right">
-            <div className="bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 bg-clip-text text-2xl font-extrabold text-transparent">{rub(order.price)}</div>
-            {order.hourly_rate != null && (
-              <div className="text-sm text-slate-400">{rub(order.hourly_rate)}/час</div>
+          <div className="text-right shrink-0">
+            {isVacancy ? (
+              <div className="text-xl font-bold text-slate-200">{order.salary_text ?? 'З/п по запросу'}</div>
+            ) : (
+              <>
+                <div className="bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 bg-clip-text text-2xl font-extrabold text-transparent">{rub(order.price)}</div>
+                {order.hourly_rate != null && (
+                  <div className="text-sm text-slate-400">{rub(order.hourly_rate)}/час</div>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -239,8 +252,14 @@ export function OrderDetail() {
                   : `до ${order.duration_max} мин`}
             </Badge>
           ) : null}
-          {order.is_external && <Badge color="purple">{order.source ?? 'Площадка'}</Badge>}
-          {isTaken ? (
+          {order.is_external && (
+            <Badge color="purple">
+              {isVacancy ? `Вакансия · ${order.source ?? 'Площадка'}` : (order.source ?? 'Площадка')}
+            </Badge>
+          )}
+          {isVacancy ? (
+            <Badge color="green">Актуальна</Badge>
+          ) : isTaken ? (
             <Badge color="green">Заказ взят</Badge>
           ) : (
             <Badge color="orange">Открыт к взятию</Badge>
@@ -253,11 +272,15 @@ export function OrderDetail() {
 
         <hr className="my-4 border-white/10" />
 
-        {/* Адрес */}
-        <h2 className="font-semibold text-slate-100 mb-2">Адрес</h2>
-        <p className="text-slate-200">{fullAddress}</p>
-        {order.landmarks && (
-          <p className="text-sm text-slate-400 mt-1">Ориентир: {order.landmarks}</p>
+        {/* Адрес (у вакансий адреса нет — street занят заголовком вакансии) */}
+        {!isVacancy && (
+          <>
+            <h2 className="font-semibold text-slate-100 mb-2">Адрес</h2>
+            <p className="text-slate-200">{fullAddress}</p>
+            {order.landmarks && (
+              <p className="text-sm text-slate-400 mt-1">Ориентир: {order.landmarks}</p>
+            )}
+          </>
         )}
 
         {order.description && (
@@ -295,41 +318,60 @@ export function OrderDetail() {
 
         <hr className="my-4 border-white/10" />
 
-        {/* Телефон заказчика */}
-        <h2 className="font-semibold text-slate-100 mb-2">Телефон заказчика</h2>
-        {order.phone && order.phone_available ? (
-          <div className="flex items-center gap-3">
-            <a
-              href={`tel:${order.phone.replace(/\s/g, '')}`}
-              className="text-lg font-bold text-emerald-300 hover:underline"
-            >
-              {order.phone}
-            </a>
-            <Badge color="green">Открыт</Badge>
-          </div>
-        ) : (
-          <div className="glass rounded-lg p-3 text-sm text-slate-300">
-            🔒 Телефон скрыт.{' '}
-            {order.is_external
-              ? 'Он откроется сразу после взятия заказа: комиссия спишется с баланса, и телефон заказчика с площадки станет доступен.'
-              : 'Он откроется автоматически после пополнения баланса и подтверждения оплаты администратором.'}
-            {!user && (
-              <div className="mt-2">
-                <Link to="/login" className="text-brand-300 font-medium hover:underline">
-                  Войдите в аккаунт
-                </Link>{' '}
-                или{' '}
-                <Link to="/register" className="text-brand-300 font-medium hover:underline">
-                  зарегистрируйтесь
-                </Link>
-                .
+        {/* Телефон заказчика (у вакансий его нет — отклик по ссылке на площадке) */}
+        {!isVacancy && (
+          <>
+            <h2 className="font-semibold text-slate-100 mb-2">Телефон заказчика</h2>
+            {order.phone && order.phone_available ? (
+              <div className="flex items-center gap-3">
+                <a
+                  href={`tel:${order.phone.replace(/\s/g, '')}`}
+                  className="text-lg font-bold text-emerald-300 hover:underline"
+                >
+                  {order.phone}
+                </a>
+                <Badge color="green">Открыт</Badge>
+              </div>
+            ) : (
+              <div className="glass rounded-lg p-3 text-sm text-slate-300">
+                🔒 Телефон скрыт.{' '}
+                {order.is_external
+                  ? 'Он откроется сразу после взятия заказа: комиссия спишется с баланса, и телефон заказчика с площадки станет доступен.'
+                  : 'Он откроется автоматически после пополнения баланса и подтверждения оплаты администратором.'}
+                {!user && (
+                  <div className="mt-2">
+                    <Link to="/login" className="text-brand-300 font-medium hover:underline">
+                      Войдите в аккаунт
+                    </Link>{' '}
+                    или{' '}
+                    <Link to="/register" className="text-brand-300 font-medium hover:underline">
+                      зарегистрируйтесь
+                    </Link>
+                    .
+                  </div>
+                )}
               </div>
             )}
-          </div>
+          </>
         )}
 
         {/* Действия */}
-        {!isTaken && (
+        {isVacancy ? (
+          <div className="mt-5">
+            <a
+              href={order.external_url ?? '#'}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 py-3 text-base font-semibold text-white transition hover:opacity-90"
+            >
+              Откликнуться на площадке ↗
+            </a>
+            <p className="text-xs text-slate-400 text-center mt-2">
+              Вакансия размещена на площадке {order.source ?? 'Работа России'}.
+              Отклик и контакты работодателя — по ссылке.
+            </p>
+          </div>
+        ) : !isTaken && (
           <div className="mt-5">
             <Button onClick={() => void handleTake()} disabled={taking} className="w-full py-3 text-base">
               {taking ? 'Оформляем…' : 'Взять заказ'}
