@@ -147,6 +147,8 @@ class Order(Base):
     category: Mapped[str] = mapped_column(String(50), default="прочее")  # тип груза
     urgency: Mapped[bool] = mapped_column(Boolean, default=False)        # срочный?
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Фото груза (путь вида cargo/<uuid>.jpg) — лучше видно объём работ
+    photo: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     # Координаты точки выполнения (для карты и сортировки по расстоянию).
     # Заполняются через кнопку «Указать моё местоположение» в форме заказа.
@@ -309,8 +311,9 @@ class Referral(Base):
     """Реферальная программа: кто кого привёл (аудит начислений бонусов).
 
     Когда новый грузчик регистрируется с реферальным кодом (публичным ID
-    пригласившего, например GRUZ-123456), создаётся запись и обоим
-    начисляется бонус REFERRAL_BONUS на баланс.
+    пригласившего, например GRUZ-123456), создаётся запись. Бонус
+    REFERRAL_BONUS начисляется пригласившему ОДИН раз — когда приглашённый
+    пополнит баланс на сумму >= REFERRAL_TOPUP_MIN (флаг bonus_paid).
     """
 
     __tablename__ = "referrals"
@@ -319,8 +322,10 @@ class Referral(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     referrer_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     referred_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
-    # Бонус, начисленный пригласившему, руб.
-    bonus_amount: Mapped[int] = mapped_column(Integer, default=100)
+    # Бонус, начисленный пригласившему, руб. (0, пока не выплачен)
+    bonus_amount: Mapped[int] = mapped_column(Integer, default=0)
+    # Выплачен ли бонус пригласившему (разово при пополнении приглашённого)
+    bonus_paid: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     referrer: Mapped["User"] = relationship(foreign_keys=[referrer_id])

@@ -28,6 +28,7 @@ from ..models import (
     Order,
     Payment,
     PromoCode,
+    Referral,
     Region,
     Review,
     Setting,
@@ -181,6 +182,26 @@ def _confirm_payment(db: Session, admin: User, payment_id: int, approve: bool) -
         else:
             user.balance += payment.amount
             action_note = f"баланс пополнен на {payment.amount}₽"
+
+            # Реферальный бонус: пригласивший получает REFERRAL_BONUS один раз,
+            # когда приглашённый пополнил баланс на >= REFERRAL_TOPUP_MIN.
+            if payment.amount >= settings.REFERRAL_TOPUP_MIN:
+                ref = db.scalar(
+                    select(Referral).where(Referral.referred_id == user.id)
+                )
+                if ref is not None and not ref.bonus_paid:
+                    referrer = db.get(User, ref.referrer_id)
+                    if referrer is not None:
+                        referrer.balance = (referrer.balance or 0) + settings.REFERRAL_BONUS
+                        ref.bonus_amount = settings.REFERRAL_BONUS
+                        ref.bonus_paid = True
+                        action_note += (f"; пригласившему {referrer.public_id} "
+                                        f"начислен реферальный бонус "
+                                        f"{settings.REFERRAL_BONUS}₽")
+                        _log(db, admin, "referral_bonus",
+                             f"Бонус за приглашение {user.public_id}: "
+                             f"+{settings.REFERRAL_BONUS}₽ (пополнение "
+                             f"{payment.amount}₽)")
 
         payment.status = "confirmed"
         payment.confirmed_at = datetime.now(timezone.utc)

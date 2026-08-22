@@ -106,6 +106,10 @@ _MIGRATIONS = [
     # Координаты точки выполнения (для карты и сортировки по расстоянию)
     ("orders", "latitude", "FLOAT"),
     ("orders", "longitude", "FLOAT"),
+    # Фото груза в заказе
+    ("orders", "photo", "VARCHAR(300)"),
+    # Рефералка: разовая выплата бонуса после пополнения приглашённого
+    ("referrals", "bonus_paid", "BOOLEAN"),
 ]
 
 
@@ -144,6 +148,8 @@ def seed(db: Session) -> None:
         db.add(Setting(key="phone_unlock_amount", value=str(settings.PHONE_UNLOCK_AMOUNT)))
     if db.get(Setting, "top20_price") is None:
         db.add(Setting(key="top20_price", value=str(settings.TOP20_DAILY_PRICE)))
+    if db.get(Setting, "urgent_surcharge") is None:
+        db.add(Setting(key="urgent_surcharge", value=str(settings.DEFAULT_URGENT_SURCHARGE)))
 
     # --- Стартовый промокод (идемпотентно) ---
     if db.scalar(select(PromoCode).where(PromoCode.code == "START100")) is None:

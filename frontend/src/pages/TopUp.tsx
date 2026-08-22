@@ -4,7 +4,7 @@
 // прикладывает чек/скриншот — администратор подтверждает вручную.
 // ============================================================
 
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api/client';
 import { Button, Field, Spinner } from '../components/ui';
@@ -30,16 +30,18 @@ export function TopUp() {
   const [bank, setBank] = useState<{ name: string; phone: string; card: string; holder: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Загружаем реквизиты и минимальную сумму при монтировании
-  useState(() => {
+  // Загружаем реквизиты и минимальную сумму при монтировании.
+  // Реквизиты для оплаты доступны любому авторизованному грузчику
+  // (GET /profile/services) — в отличие от /admin/settings (только админ).
+  useEffect(() => {
     api
-      .adminSettings()
+      .services()
       .then((s) => {
         setBank({ ...REQUISITES_DEFAULT, ...s.bank });
         setAmount(String(s.min_topup));
       })
       .catch(() => setBank({ ...REQUISITES_DEFAULT }));
-  });
+  }, []);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();

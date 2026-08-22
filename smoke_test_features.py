@@ -37,6 +37,33 @@ def req(method, path, body=None, token=None, raw=False):
             return e.code, content.decode(errors="replace")
 
 
+def req_form(method, path, fields, token=None):
+    """POST multipart/form-data (для /profile/topup: поля Form + опциональный чек)."""
+    import uuid
+
+    boundary = "----smoke" + uuid.uuid4().hex
+    parts = []
+    for k, v in fields.items():
+        parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode()
+        )
+    parts.append(f"--{boundary}--\r\n".encode())
+    data = b"".join(parts)
+    r = urllib.request.Request(BASE + path, data=data, method=method)
+    r.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    if token:
+        r.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(r, timeout=15) as resp:
+            return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        content = e.read()
+        try:
+            return e.code, json.loads(content)
+        except Exception:
+            return e.code, content.decode(errors="replace")
+
+
 def check(name, cond, extra=""):
     global PASSED, FAILED
     if cond:
@@ -107,16 +134,39 @@ def main():
                {"phone": P(4), "name": "Приглашённый", "password": "pass123",
                 "promo_code": ref_code})
     check("регистрация по реферальному коду", s == 200, str(r)[:150])
-    check("бонус приглашённому 100", r.get("user", {}).get("balance") == 100,
+    check("бонус приглашённому не начислен сразу", r.get("user", {}).get("balance") == 0,
           f"balance={r.get('user', {}).get('balance')}")
     invited_token = r["token"]
 
+    # Бонус пригласившему — только после подтверждённого пополнения приглашённого
     s, r = req("GET", "/profile", token=referrer_token)
-    check("бонус рефереру 100", r.get("balance") == 100, f"balance={r.get('balance')}")
+    check("бонус рефереру не начислен до пополнения", r.get("balance") == 0,
+          f"balance={r.get('balance')}")
+
+    s, r = req_form("POST", "/profile/topup", {"amount": "300"}, token=invited_token)
+    check("заявка на пополнение 300 от приглашённого",
+          s == 200 and r.get("detail", {}).get("payment_id"), str(r)[:150])
+    invited_payment_id = r["detail"]["payment_id"]
+
+    s, r = req("POST", f"/admin/payments/{invited_payment_id}/confirm", token=admin_token)
+    check("админ подтверждает пополнение приглашённого", s == 200, str(r)[:150])
+
+    s, r = req("GET", "/profile", token=referrer_token)
+    check("бонус рефереру 100 после пополнения >= REFERRAL_TOPUP_MIN",
+          r.get("balance") == 100, f"balance={r.get('balance')}")
 
     s, r = req("GET", "/profile/referral", token=referrer_token)
     check("referrals_count=1 и total_bonus=100", r.get("referrals_count") == 1 and r.get("total_bonus") == 100,
           str(r)[:200])
+
+    # Повторное пополнение — бонус начисляется только один раз (bonus_paid)
+    s, r = req_form("POST", "/profile/topup", {"amount": "100"}, token=invited_token)
+    second_payment_id = r.get("detail", {}).get("payment_id")
+    if second_payment_id:
+        req("POST", f"/admin/payments/{second_payment_id}/confirm", token=admin_token)
+    s, r = req("GET", "/profile", token=referrer_token)
+    check("повторное пополнение не начисляет бонус снова", r.get("balance") == 100,
+          f"balance={r.get('balance')}")
 
     # ---------- 5. Заказ с гео-координатами (публичная форма) ----------
     s, r = req("POST", "/orders/public", {

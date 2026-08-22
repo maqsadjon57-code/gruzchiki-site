@@ -93,7 +93,7 @@ export function Register() {
             placeholder="START100 или GRUZ-123456"
             value={promoCode || initialPromo}
             onChange={(e) => setPromoCode(e.target.value)}
-            hint="Введите промокод или реферальный код грузчика — бонус начислится на баланс сразу после регистрации."
+            hint="Промокод начислит бонус сразу; реферальный код принесёт бонус пригласившему после вашего пополнения."
           />
           <Button type="submit" disabled={busy}>
             {busy ? 'Создаём аккаунт…' : 'Зарегистрироваться'}

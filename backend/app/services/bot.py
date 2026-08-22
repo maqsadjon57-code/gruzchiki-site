@@ -38,18 +38,32 @@ _thread: threading.Thread | None = None
 POLL_TIMEOUT = 30  # long polling, секунды
 
 
+class _AuthError(Exception):
+    """Bot API вернул 401 — токен невалиден, дальнейший поллинг бессмыслен."""
+
+
 def _api(method: str, payload: dict) -> dict | None:
-    """Вызов Bot API. Возвращает JSON или None при ошибке сети/API."""
+    """Вызов Bot API. Возвращает JSON или None при ошибке сети/API.
+
+    При HTTP 401 (невалидный TELEGRAM_BOT_TOKEN) бросает _AuthError:
+    поллинг должен остановиться, а не спамить запросами в бесконечном цикле.
+    """
     try:
         resp = requests.post(
             f"{API_BASE.format(token=settings.TELEGRAM_BOT_TOKEN)}/{method}",
             json=payload,
             timeout=POLL_TIMEOUT + 10,
         )
+        if resp.status_code == 401:
+            raise _AuthError(
+                f"Telegram Bot API: HTTP 401 (невалидный TELEGRAM_BOT_TOKEN) на {method}"
+            )
         data = resp.json()
         if not data.get("ok"):
             logger.warning("Telegram API error %s: %s", method, data)
         return data
+    except _AuthError:
+        raise
     except Exception as exc:
         logger.warning("Telegram request %s failed: %s", method, exc)
         return None
@@ -233,31 +247,50 @@ def polling_loop() -> None:
         return
 
     offset = 0
+    backoff = 1  # секунды паузы при сетевых/API-ошибках (растёт до 30)
     while not _stop.is_set():
-        updates = _api("getUpdates", {
-            "timeout": POLL_TIMEOUT,
-            "offset": offset,
-            "allowed_updates": ["message", "callback_query"],
-        })
+        try:
+            updates = _api("getUpdates", {
+                "timeout": POLL_TIMEOUT,
+                "offset": offset,
+                "allowed_updates": ["message", "callback_query"],
+            })
+        except _AuthError:
+            logger.critical(
+                "Telegram Bot API вернул 401 — проверьте TELEGRAM_BOT_TOKEN. "
+                "Поллинг остановлен, сайт продолжает работать без бота."
+            )
+            return
+
         if updates is None:
-            time.sleep(5)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30)
             continue
+
+        backoff = 1
 
         for upd in updates.get("result", []):
             update_id = upd.get("update_id", 0)
             offset = max(offset, update_id + 1)
 
-            if "callback_query" in upd:
-                cb = upd["callback_query"]
-                chat_id = cb.get("message", {}).get("chat", {}).get("id")
-                if chat_id is not None:
-                    _handle_callback(chat_id, cb.get("id", ""), cb.get("data", ""))
-            elif "message" in upd:
-                msg = upd["message"]
-                chat_id = msg.get("chat", {}).get("id")
-                text = (msg.get("text") or "").strip()
-                if chat_id is not None and text:
-                    _handle_message(chat_id, text)
+            try:
+                if "callback_query" in upd:
+                    cb = upd["callback_query"]
+                    chat_id = cb.get("message", {}).get("chat", {}).get("id")
+                    if chat_id is not None:
+                        _handle_callback(chat_id, cb.get("id", ""), cb.get("data", ""))
+                elif "message" in upd:
+                    msg = upd["message"]
+                    chat_id = msg.get("chat", {}).get("id")
+                    text = (msg.get("text") or "").strip()
+                    if chat_id is not None and text:
+                        _handle_message(chat_id, text)
+            except _AuthError:
+                logger.critical(
+                    "Telegram Bot API вернул 401 при обработке обновления — "
+                    "поллинг остановлен."
+                )
+                return
 
     logger.info("Telegram-бот остановлен")
 

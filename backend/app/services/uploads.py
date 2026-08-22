@@ -94,3 +94,40 @@ async def save_avatar(file: UploadFile) -> str:
     (avatar_dir / filename).write_bytes(content)
 
     return f"avatars/{filename}"
+
+
+# Допустимые форматы фото груза и максимальный размер
+PHOTO_EXTENSIONS = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+MAX_PHOTO_SIZE = 5 * 1024 * 1024  # 5 МБ
+
+
+async def save_photo(file: UploadFile | None) -> str | None:
+    """
+    Сохранить фото груза и вернуть относительный путь (для БД).
+    Путь вида cargo/<uuid>.<ext>, отдаётся через /uploads/cargo/...
+    Если файл не передан — вернуть None.
+    """
+    if file is None or not file.filename:
+        return None
+
+    ext = PHOTO_EXTENSIONS.get(file.content_type or "")
+    if ext is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Недопустимый формат фото. Разрешены: JPG, PNG, WEBP",
+        )
+
+    content = await file.read()
+    if len(content) > MAX_PHOTO_SIZE:
+        raise HTTPException(status_code=400, detail="Фото слишком большое (макс. 5 МБ)")
+
+    cargo_dir = Path(settings.upload_dir).parent / "cargo"
+    cargo_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}{ext}"
+    (cargo_dir / filename).write_bytes(content)
+
+    return f"cargo/{filename}"

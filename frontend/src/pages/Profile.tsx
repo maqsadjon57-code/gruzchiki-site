@@ -345,7 +345,7 @@ export function Profile() {
                 Реферальная программа
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Пригласите грузчика — получите {rub(referral.bonus)} на баланс за каждого.
+                Пригласите грузчика — когда он пополнит баланс от 300 ₽, вы получите {rub(referral.bonus)}.
               </p>
             </div>
             <div className="text-right">
@@ -372,7 +372,7 @@ export function Profile() {
               Копировать ссылку
             </Button>
             <p className="text-xs text-slate-400">
-              Друг вставит код при регистрации — бонус начислится вам обоим.
+              Друг вставит код при регистрации и пополнит баланс от 300 ₽ — вы получите {rub(referral.bonus)}.
             </p>
           </div>
         </div>

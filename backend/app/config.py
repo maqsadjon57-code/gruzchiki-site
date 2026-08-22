@@ -111,8 +111,10 @@ class Settings:
     ]
 
     # --- Реферальная программа ----------------------------------------------
-    # Бонус пригласившему и новому грузчику за регистрацию по реферальной ссылке
+    # Бонус пригласившему за регистрацию по реферальной ссылке
     REFERRAL_BONUS: int = int(_env("REFERRAL_BONUS", "100"))
+    # Минимальная сумма пополнения приглашённого, после которой реферер получает бонус
+    REFERRAL_TOPUP_MIN: int = int(_env("REFERRAL_TOPUP_MIN", "300"))
 
     # --- Внешние интеграции ------------------------------------------------
     # Ключ API SuperJob (https://api.superjob.ru) — включает SuperJob в админ-ленту.
@@ -120,6 +122,31 @@ class Settings:
     SUPERJOB_API_KEY: str = _env("SUPERJOB_API_KEY", "")
     # Максимум заказов в ленте (публичной и админской)
     FEED_LIMIT: int = int(_env("FEED_LIMIT", "150"))
+
+    # --- СБП (QR-оплата) ------------------------------------------------------
+    # Номер телефона для оплаты по СБП (только цифры)
+    SBP_PHONE: str = _env("SBP_PHONE", "79232366362")
+    # Готовый payload СБП-платёжки от банка/НСПК (https://qr.nspk.ru/...).
+    # Плейсхолдеры: {sum} — сумма в копейках, {amount} — сумма в рублях.
+    # Если пусто — QR кодирует текстовую платёжку (телефон + сумма), которую
+    # можно отсканировать и оплатить вручную.
+    SBP_QR_PAYLOAD: str = _env("SBP_QR_PAYLOAD", "")
+
+    # --- Срочный заказ --------------------------------------------------------
+    # Наценка за срочность в публичной форме заказа, руб.
+    DEFAULT_URGENT_SURCHARGE: int = int(_env("DEFAULT_URGENT_SURCHARGE", "300"))
+
+    # --- SMTP (автоотчёт на почту) --------------------------------------------
+    SMTP_HOST: str = _env("SMTP_HOST", "")
+    SMTP_PORT: int = int(_env("SMTP_PORT", "587"))
+    SMTP_USER: str = _env("SMTP_USER", "")
+    SMTP_PASSWORD: str = _env("SMTP_PASSWORD", "")
+    SMTP_FROM: str = _env("SMTP_FROM", "")
+    # Кому отправлять еженедельный отчёт (через запятую)
+    REPORT_EMAILS: str = _env("REPORT_EMAILS", "")
+    # День недели (0=Пн ... 6=Вс) и час (0-23) отправки автоотчёта
+    REPORT_WEEKDAY: int = int(_env("REPORT_WEEKDAY", "0"))
+    REPORT_HOUR: int = int(_env("REPORT_HOUR", "9"))
 
     # Папка загрузок
     upload_dir = UPLOAD_DIR

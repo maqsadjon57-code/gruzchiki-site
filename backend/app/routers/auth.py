@@ -78,7 +78,9 @@ def _apply_promo_and_referral(
       * промокод из админ-панели (код вида WELCOME-100) — начисляется
         бонус, указанный в промокоде;
       * реферальный код пригласившего (его публичный ID, GRUZ-123456) —
-        бонус REFERRAL_BONUS начисляется обоим.
+        создаётся запись Referral, а бонус REFERRAL_BONUS начисляется
+        пригласившему ОДИН раз, когда приглашённый пополнит баланс на
+        сумму >= REFERRAL_TOPUP_MIN и админ подтвердит оплату.
 
     Вернуть человекочитаемое описание начисленных бонусов (для лога).
     """
@@ -101,7 +103,11 @@ def _apply_promo_and_referral(
                         details=f"Активирован промокод {promo.code}: +{promo.bonus}₽"))
         return f"промокод {promo.code} +{promo.bonus}₽"
 
-    # 2) Реферальный код — публичный ID пригласившего
+    # 2) Реферальный код — публичный ID пригласившего.
+    #    Бонус НЕ начисляется сразу: запись фиксирует факт приглашения,
+    #    а REFERRAL_BONUS пригласивший получит один раз после того, как
+    #    приглашённый пополнит баланс на >= REFERRAL_TOPUP_MIN и админ
+    #    подтвердит оплату (см. _confirm_payment в admin.py).
     referrer = db.scalar(select(User).where(User.public_id == code.upper()))
     if referrer is not None:
         if referrer.id == user.id:
@@ -110,16 +116,15 @@ def _apply_promo_and_referral(
         if referrer.is_blocked:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail="Аккаунт пригласившего заблокирован")
-        bonus = settings.REFERRAL_BONUS
         user.referred_by = referrer.id
-        user.balance = (user.balance or 0) + bonus
-        referrer.balance = (referrer.balance or 0) + bonus
-        db.add(Referral(referrer_id=referrer.id, referred_id=user.id, bonus_amount=bonus))
+        db.add(Referral(referrer_id=referrer.id, referred_id=user.id,
+                        bonus_amount=0, bonus_paid=False))
         db.add(AdminLog(user_id=user.id, action="referral_used",
-                        details=f"Зарегистрирован по рефералке {referrer.public_id}: +{bonus}₽"))
-        db.add(AdminLog(user_id=referrer.id, action="referral_bonus",
-                        details=f"Бонус за приглашение {user.public_id}: +{bonus}₽"))
-        return f"рефералка {referrer.public_id} +{bonus}₽"
+                        details=f"Зарегистрирован по рефералке {referrer.public_id}: "
+                                f"бонус {settings.REFERRAL_BONUS}₽ после пополнения "
+                                f"на >= {settings.REFERRAL_TOPUP_MIN}₽"))
+        return (f"рефералка {referrer.public_id}: +{settings.REFERRAL_BONUS}₽ "
+                f"после пополнения на >= {settings.REFERRAL_TOPUP_MIN}₽")
 
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Промокод не найден или недействителен")
