@@ -165,7 +165,7 @@ def _fetch_hh(query: str, limit: int) -> list[dict[str, Any]]:
             "order_by": "publication_time",
         },
         headers={"User-Agent": USER_AGENT},
-        timeout=6,
+        timeout=15,
     )
     resp.raise_for_status()
     data = resp.json()
@@ -194,19 +194,32 @@ def _fetch_trudvsem(query: str, limit: int) -> list[dict[str, Any]]:
     limit = max(1, min(int(limit), 100))
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
+    def _get_page(offset: int, page_size: int) -> list[dict]:
+        """Страница выдачи с ретраем: с зарубежных серверов (Render) API
+        «Работа России» отвечает медленно или с перебоями."""
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            try:
+                resp = requests.get(
+                    TRUDVSEM_API,
+                    params={"text": query, "limit": page_size, "offset": offset},
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return (((data or {}).get("results") or {}).get("vacancies")) or []
+            except (requests.RequestException, ValueError) as exc:
+                last_exc = exc
+                time.sleep(1.0 * (attempt + 1))
+        logger.warning("Работа России не ответила (offset=%s): %s", offset, last_exc)
+        return []
+
     for offset in range(0, limit, 50):
         page_size = min(50, limit - len(items))
         if page_size <= 0:
             break
-        resp = requests.get(
-            TRUDVSEM_API,
-            params={"text": query, "limit": page_size, "offset": offset},
-            headers={"User-Agent": USER_AGENT},
-            timeout=8,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        vacancies = (((data or {}).get("results") or {}).get("vacancies")) or []
+        vacancies = _get_page(offset, page_size)
         for raw in vacancies:
             v = raw.get("vacancy") or {}
             vid = v.get("id")
@@ -738,7 +751,7 @@ def _fetch_superjob(query: str, limit: int) -> list[dict[str, Any]]:
             SUPERJOB_API,
             params={"keyword": query, "count": min(limit, 100), "page": 0},
             headers={"X-Api-App-Id": settings.SUPERJOB_API_KEY},
-            timeout=6,
+            timeout=15,
         )
     except requests.RequestException as exc:
         logger.warning("SuperJob недоступен: %s", exc)
