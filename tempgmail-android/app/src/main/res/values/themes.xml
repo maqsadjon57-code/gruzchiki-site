@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Тема приложения для системы (статусбар/сплэш).
+     Цвета самой темы Material 3 задаются программно в ui/theme/Theme.kt -->
+<resources>
+    <style name="Theme.TempGmail" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

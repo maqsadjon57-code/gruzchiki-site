@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Пути, доступные FileProvider'у для шаринга экспортных файлов -->
+<paths>
+    <cache-path name="exports" path="exports/" />
+    <files-path name="exports_files" path="exports/" />
+</paths>

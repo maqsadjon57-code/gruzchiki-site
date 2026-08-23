@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Русская локализация -->
+<resources>
+    <string name="app_name">Временный Gmail</string>
+
+    <!-- Навигация -->
+    <string name="nav_home">Главная</string>
+    <string name="nav_history">История</string>
+    <string name="nav_settings">Настройки</string>
+
+    <!-- Генерация -->
+    <string name="main_email_hint">Ваш адрес Gmail</string>
+    <string name="custom_label_hint">Метка (по желанию)</string>
+    <string name="site_hint">Название сайта (например, ozon)</string>
+    <string name="btn_generate">Сгенерировать</string>
+    <string name="btn_generate_another">Другой адрес</string>
+    <string name="btn_copy">Копировать</string>
+    <string name="btn_show_qr">Показать QR</string>
+    <string name="btn_create_filter">Создать фильтр</string>
+    <string name="btn_show_instruction">Инструкция</string>
+    <string name="copied">Адрес скопирован</string>
+    <string name="error_invalid_email">Введите корректный адрес Gmail</string>
+    <string name="error_label_chars">Только a-z, 0-9, дефис и подчёркивание</string>
+    <string name="error_no_internet">Нет подключения к интернету</string>
+    <string name="generated_title">Ваш временный адрес</string>
+    <string name="qr_dialog_title">QR-код адреса</string>
+
+    <!-- Фильтры -->
+    <string name="filter_title">Действие фильтра</string>
+    <string name="filter_delete">Удалять письма</string>
+    <string name="filter_archive">Архивировать (пропускать входящие)</string>
+    <string name="filter_mark_read">Помечать прочитанными</string>
+    <string name="filter_label">Применить ярлык</string>
+    <string name="filter_spam">Перемещать в спам</string>
+    <string name="filter_created">Фильтр создан в Gmail</string>
+    <string name="filter_deleted">Фильтр удалён</string>
+    <string name="filter_error">Не удалось создать фильтр: %1$s</string>
+    <string name="auth_required">Войдите через Google, чтобы создавать фильтры автоматически</string>
+    <string name="filter_query_template">to:(%1$s)</string>
+
+    <!-- Инструкция -->
+    <string name="instruction_title">Ручная настройка фильтра</string>
+    <string name="instruction_step_1">1. Откройте Gmail на компьютере или телефоне.</string>
+    <string name="instruction_step_2">2. Вставьте этот текст в поиск и откройте параметры поиска:</string>
+    <string name="instruction_step_3">3. Нажмите «Создать фильтр».</string>
+    <string name="instruction_step_4">4. Выберите действие (например, «Удалить») и снова нажмите «Создать фильтр».</string>
+    <string name="instruction_done">Готово! Письма на этот адрес будут обрабатываться автоматически.</string>
+
+    <!-- История -->
+    <string name="history_title">История адресов</string>
+    <string name="history_search_hint">Поиск по адресу или метке</string>
+    <string name="history_empty">Пока пусто. Сгенерируйте первый адрес!</string>
+    <string name="history_filter_all">Все</string>
+    <string name="history_filter_active">Активные</string>
+    <string name="history_filter_disabled">Отключённые</string>
+    <string name="history_export">Экспорт</string>
+    <string name="history_export_done">Список экспортирован</string>
+    <string name="history_delete_title">Удалить адрес?</string>
+    <string name="history_delete_message">Адрес %1$s будет удалён из истории.</string>
+    <string name="history_delete_with_filter">Также удалить фильтр Gmail</string>
+    <string name="status_active">Активен</string>
+    <string name="status_disabled">Отключён</string>
+    <string name="messages_count">Писем: %1$d</string>
+    <string name="created_at_format">Создан %1$s</string>
+    <string name="delete">Удалить</string>
+    <string name="cancel">Отмена</string>
+
+    <!-- Аккаунты -->
+    <string name="accounts_title">Аккаунты</string>
+    <string name="account_add">Добавить аккаунт</string>
+    <string name="account_sign_out">Выйти</string>
+    <string name="account_active">Текущий</string>
+    <string name="account_signed_out">Вы вышли из аккаунта</string>
+    <string name="sign_in_google">Войти через Google</string>
+
+    <!-- Настройки -->
+    <string name="settings_theme">Тема</string>
+    <string name="theme_light">Светлая</string>
+    <string name="theme_dark">Тёмная</string>
+    <string name="theme_system">Системная</string>
+    <string name="settings_language">Язык</string>
+    <string name="settings_label_length">Длина метки: %1$d</string>
+    <string name="settings_use_digits">Использовать цифры</string>
+    <string name="settings_use_letters">Использовать буквы</string>
+    <string name="settings_auto_cleanup">Автоудаление старых адресов</string>
+    <string name="settings_cleanup_days">Удалять старше %1$d дней</string>
+    <string name="settings_export">Экспорт настроек</string>
+    <string name="settings_import">Импорт настроек</string>
+    <string name="settings_export_done">Настройки экспортированы</string>
+    <string name="settings_import_done">Настройки импортированы</string>
+    <string name="settings_import_error">Не удалось импортировать настройки</string>
+    <string name="settings_about">О приложении</string>
+    <string name="settings_version">Версия %1$s</string>
+    <string name="settings_privacy">Политика конфиденциальности</string>
+
+    <!-- Онбординг -->
+    <string name="onboarding_title_1">Одноразовые адреса</string>
+    <string name="onboarding_text_1">Создавайте временные адреса вида вы+метка@gmail.com. Все письма приходят в ваш настоящий ящик.</string>
+    <string name="onboarding_title_2">Автоматические фильтры</string>
+    <string name="onboarding_text_2">Создавайте фильтры Gmail в один тап: удалять, архивировать или помечать нежелательные письма.</string>
+    <string name="onboarding_title_3">Приватность прежде всего</string>
+    <string name="onboarding_text_3">Данные остаются на устройстве. Используются только официальные API Google.</string>
+    <string name="onboarding_start">Начать</string>
+    <string name="onboarding_next">Далее</string>
+    <string name="onboarding_skip">Пропустить</string>
+
+    <!-- Виджет -->
+    <string name="widget_label">Временный Gmail</string>
+    <string name="widget_no_email">Адрес ещё не создан</string>
+    <string name="widget_generate">Создать</string>
+    <string name="widget_copy">Копировать</string>
+
+    <!-- Сообщения -->
+    <string name="error_generic">Что-то пошло не так</string>
+    <string name="auth_error">Не удалось войти через Google</string>
+</resources>
