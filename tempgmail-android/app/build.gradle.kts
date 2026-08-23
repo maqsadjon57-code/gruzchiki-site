@@ -28,8 +28,25 @@ android {
         vectorDrawables { useSupportLibrary = true }
     }
 
+    // Подпись release-сборки. Ключ лежит в keys/tempgmail-release.jks,
+    // пароли можно переопределить в gradle.properties локали (не коммитить!).
+    signingConfigs {
+        create("release") {
+            val ksFile = rootProject.file("keys/tempgmail-release.jks")
+            if (ksFile.exists()) {
+                storeFile = ksFile
+                keyAlias = findProperty("TEMP_GMAIL_KEY_ALIAS") as String? ?: "tempgmail"
+                storePassword = findProperty("TEMP_GMAIL_STORE_PASSWORD") as String? ?: "TempGmail2025!"
+                keyPassword = findProperty("TEMP_GMAIL_KEY_PASSWORD") as String? ?: "TempGmail2025!"
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (rootProject.file("keys/tempgmail-release.jks").exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true       // обфускация и сжатие кода (ProGuard/R8)
             isShrinkResources = true     // вырезание неиспользуемых ресурсов
             proguardFiles(
